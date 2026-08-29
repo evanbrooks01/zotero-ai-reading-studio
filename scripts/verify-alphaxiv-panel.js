@@ -330,6 +330,7 @@ function verifyPanelContract() {
   assert.match(source, /isReaderAuxiliaryPanelEvent/);
   assert.match(source, /isReaderAlphaXivSurfaceActive/);
   assert.match(source, /data-zai-reader-toolbar-overlay/);
+  assert.match(source, /older add-on version may still carry the old/);
   assert.match(source, /toolbar's "简读" button/);
   assert.match(paneSource, /toggleReaderChatPane\(state\.reader/);
 

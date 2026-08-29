@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.10
+
+- Rebuilt stale transparent toolbar overlays after an add-on upgrade so the alphaXiv AI guard is always active.
+
 ## 0.7.9
 
 - Prevented transparent PDF toolbar overlays from intercepting the alphaXiv brief's AI button.

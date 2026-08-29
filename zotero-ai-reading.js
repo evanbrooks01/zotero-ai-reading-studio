@@ -1338,6 +1338,13 @@ var ZoteroAIReading = {
       }
 
       let overlay = doc.getElementById(this.getReaderToolbarButtonOverlayID(reader, button));
+      if (overlay) {
+        // A pane restored from an older add-on version may still carry the old
+        // event listener. Rebuild the small transparent hit target so the
+        // current auxiliary-panel guard is always installed.
+        overlay.remove?.();
+        overlay = null;
+      }
       if (!overlay) {
         overlay = doc.createXULElement
           ? doc.createXULElement("button")
