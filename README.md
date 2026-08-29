@@ -46,6 +46,21 @@
 - 打开或关闭面板时保留 PDF 的阅读位置；流式回答期间不会强制滚动阅读页面。
 - AI 输出失败或连接超时时会保留明确的错误消息，不会留下空的“正在生成”气泡。
 
+## 使用截图（待补）
+
+README 为当前版本预留了下面的截图位置。你可以用自己的 Zotero 界面截图替换这些占位；文件请放到 `docs/screenshots/` 并使用表中的文件名。截图前请清空或遮盖 API URL、Key、账号和本地文件路径。
+
+| 文件名 | 建议截图内容 |
+| --- | --- |
+| `01-settings.png` | `编辑 -> 设置 -> AI Reading Assistant`：API 字段（留空或打码）、阅读模型/官方 reasoning，以及独立的翻译模型/reasoning。 |
+| `02-reader-ai.png` | PDF 阅读器中的 AI 面板：模型选择、检索开关、附加当前 PDF、流式 Markdown 回复。 |
+| `03-translation.png` | 左侧翻译面板：选区原文、译文、翻译模型设置按钮，以及“放入对话”按钮。 |
+| `04-translation-to-chat.png` | 点击“放入对话”后的 AI 面板：选中的原文和译文作为当前论文会话上下文。 |
+| `05-brief-question.png` | alphaXiv 简读页面释放选区后，选区附近自动出现的本地“提问”编辑器。 |
+| `06-history.png` | AI 面板的历史会话列表：同一篇论文的多个会话、首问标题、切换和删除入口。 |
+
+当前这些是文字占位，不会伪造旧版截图。完整的截图尺寸、命名和替换说明见 [`docs/screenshots/README.md`](docs/screenshots/README.md)。
+
 ## 安装
 
 1. 从 [Releases](https://github.com/Shanfu2021/zotero-ai-reading-studio/releases) 下载最新的 `.xpi`。

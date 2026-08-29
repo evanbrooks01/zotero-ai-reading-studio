@@ -26,6 +26,7 @@ scripts/*-result.json
 
 # Legacy/local screenshots are not part of the public release.
 image/
+docs/screenshots/_*.png
 
 # Local dependency/cache directories
 node_modules/

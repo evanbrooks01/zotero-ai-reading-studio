@@ -46,6 +46,21 @@ An independently maintained Zotero workspace for paper reading. It keeps Zotero 
 - Opening or closing a pane preserves the PDF reading position, and streaming answers do not force-scroll the document.
 - Failed or timed-out requests leave an explicit error message instead of an empty permanent “generating” bubble.
 
+## Usage screenshots (placeholders)
+
+The current README reserves the screenshot slots below. Replace each placeholder with your own Zotero screenshot under `docs/screenshots/`, using the filenames in the table. Clear or redact API URLs, keys, account names, and local file paths before committing screenshots.
+
+| File | Suggested capture |
+| --- | --- |
+| `01-settings.png` | `Edit -> Settings -> AI Reading Assistant`: blank/redacted API fields, reading model and official reasoning, plus separate translation model/reasoning. |
+| `02-reader-ai.png` | The AI pane beside a PDF: model selector, retrieval toggle, attach-current-PDF control, and a streamed Markdown answer. |
+| `03-translation.png` | The left translation pane: source selection, translated text, translation settings button, and the “Add to chat” action. |
+| `04-translation-to-chat.png` | The AI pane after “Add to chat”, showing the selected source and translation included in the current paper session. |
+| `05-brief-question.png` | The local contextual question editor that appears beside a released selection in the alphaXiv brief. |
+| `06-history.png` | The history list with multiple sessions for one paper, first-question titles, switch, and delete controls. |
+
+These are text placeholders rather than stale screenshots. See [`docs/screenshots/README.md`](docs/screenshots/README.md) for capture dimensions, naming, and replacement instructions.
+
 ## Install
 
 1. Download the latest `.xpi` from [Releases](https://github.com/Shanfu2021/zotero-ai-reading-studio/releases).
