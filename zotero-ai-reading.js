@@ -1119,7 +1119,7 @@ var ZoteroAIReading = {
     );
   },
 
-  isReaderAuxiliaryPanelEvent(event) {
+  isReaderAuxiliaryPanelEvent(event, reader = null) {
     // The toolbar bridge listens on the PDF iframe's owner document. That
     // document also contains our side panes, so a click in a pane must not be
     // reinterpreted as a click on the toolbar's alphaXiv button.
@@ -1143,6 +1143,30 @@ var ZoteroAIReading = {
             return true;
           }
           current = current.parentNode || current.host || null;
+        }
+      }
+      // Remote XUL browsers can retarget an outer-document event to the
+      // browser element, hiding the original HTML target from composedPath().
+      // A geometry check keeps those events out of the toolbar bridge too.
+      if (reader && Number.isFinite(Number(event?.clientX)) && Number.isFinite(Number(event?.clientY))) {
+        let doc = reader?._window?.document || reader?._iframe?.ownerDocument;
+        let paneIDs = [
+          this.getReaderPaneID(reader),
+          this.getReaderTranslationPaneID(reader),
+          this.getReaderAlphaXivPaneID(reader)
+        ];
+        for (let paneID of paneIDs) {
+          let pane = doc?.getElementById?.(paneID);
+          if (!pane || pane.hidden || pane.hasAttribute?.("hidden") ||
+              pane.hasAttribute?.("data-zai-alpha-surface-hidden")) {
+            continue;
+          }
+          let rect = pane.getBoundingClientRect?.();
+          if (rect && rect.width > 0 && rect.height > 0 &&
+              Number(event.clientX) >= rect.left && Number(event.clientX) <= rect.right &&
+              Number(event.clientY) >= rect.top && Number(event.clientY) <= rect.bottom) {
+            return true;
+          }
         }
       }
     }
@@ -1187,7 +1211,7 @@ var ZoteroAIReading = {
           if (!this.isLeftActivationEvent(event)) {
             return;
           }
-          if (this.isReaderAuxiliaryPanelEvent(event)) {
+          if (this.isReaderAuxiliaryPanelEvent(event, reader)) {
             return;
           }
           let iframeRect = iframe.getBoundingClientRect();
@@ -5977,8 +6001,8 @@ var ZoteroAIReading = {
     if (!state?.historyPanel || !state.historyList) {
       return;
     }
-    // Keep the active session's title and preview current while the answer is
-    // streaming without replacing the live message array.
+    // Keep the active session's first-question title current while the answer
+    // is streaming without replacing the live message array.
     if (state.loaded && state.activeSessionID) {
       this.syncReaderConversationSession(state, { touch: false });
     }

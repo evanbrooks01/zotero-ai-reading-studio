@@ -9,6 +9,8 @@ vm.createContext(context);
 vm.runInContext(source, context, { filename: "zotero-ai-reading.js" });
 const sut = context.ZoteroAIReading;
 
+assert.doesNotMatch(source, /zai-reader-chat-history-session-preview/);
+
 async function run() {
   const first = sut.createReaderConversationSession();
   assert.strictEqual(sut.getReaderConversationSessionTitle(first), "新会话");
