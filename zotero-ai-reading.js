@@ -29,7 +29,7 @@ var ZoteroAIReading = {
   READER_BUTTON_ID: "zotero-ai-reading-reader-button",
   READER_TRANSLATION_BUTTON_ID: "zotero-ai-reading-translation-button",
   READER_ALPHAXIV_BUTTON_ID: "zotero-ai-reading-alphaxiv-button",
-  READER_ALPHAXIV_UI_VERSION: "selection-question-2",
+  READER_ALPHAXIV_UI_VERSION: "selection-question-3",
   CHAT_NOTE_MARKER: "ZAI_CHAT_V1:",
   CHAT_NOTE_VERSION: 3,
   _readerConversationCounter: 0,
@@ -1119,6 +1119,37 @@ var ZoteroAIReading = {
     );
   },
 
+  isReaderAuxiliaryPanelEvent(event) {
+    // The toolbar bridge listens on the PDF iframe's owner document. That
+    // document also contains our side panes, so a click in a pane must not be
+    // reinterpreted as a click on the toolbar's alphaXiv button.
+    try {
+      let path = [];
+      try {
+        path = typeof event?.composedPath === "function" ? event.composedPath() : [];
+      }
+      catch (_) {}
+      if (!path.length && event?.target) {
+        path = [event.target];
+      }
+      for (let node of path) {
+        let current = node;
+        for (let depth = 0; current && depth < 14; depth++) {
+          if (current.classList?.contains?.("zai-reader-ai-pane")) {
+            return true;
+          }
+          let paneMode = String(current.getAttribute?.("data-zai-pane-mode") || "");
+          if (["native-chat", "translation", "alphaxiv"].includes(paneMode)) {
+            return true;
+          }
+          current = current.parentNode || current.host || null;
+        }
+      }
+    }
+    catch (_) {}
+    return false;
+  },
+
   runReaderToolbarButton(reader, button) {
     if (button?.disabled) {
       return;
@@ -1154,6 +1185,9 @@ var ZoteroAIReading = {
       let listener = (event) => {
         try {
           if (!this.isLeftActivationEvent(event)) {
+            return;
+          }
+          if (this.isReaderAuxiliaryPanelEvent(event)) {
             return;
           }
           let iframeRect = iframe.getBoundingClientRect();
@@ -1773,7 +1807,12 @@ var ZoteroAIReading = {
 
   getReaderConversationSessionPreview(session) {
     let messages = Array.isArray(session?.messages) ? session.messages : [];
-    let candidate = [...messages].reverse().find((message) => String(message?.text || "").trim()) || null;
+    // History summaries represent a session by its first question. Do not
+    // expose an assistant reply here: long answers make the list noisy and
+    // make it harder to scan or find another session.
+    let candidate = messages.find((message) =>
+      message?.role === "user" && String(message?.text || "").trim()
+    ) || null;
     let text = String(candidate?.text || candidate?.reasoning || "").replace(/\s+/g, " ").trim();
     if (text.length > 180) {
       text = text.slice(0, 177) + "...";
@@ -2763,6 +2802,7 @@ var ZoteroAIReading = {
       selectionQuestionSend: null,
       selectionQuestionDraft: "",
       selectionQuestionOpen: false,
+      alphaChatButton: null,
       modeButtons: [],
       languageButtons: [],
       availability: null,
@@ -3010,14 +3050,21 @@ var ZoteroAIReading = {
       // reading surface back to the local PDF.
       event?.preventDefault?.();
       event?.stopPropagation?.();
-      this.openNativeReaderChatPane(state.reader, {
+      this.toggleReaderChatPane(state.reader, {
         focusComposer: false,
         preserveAlphaXivSurface: true
+      }).then(() => {
+        let current = this.readerAlphaXivStates.get(state.reader) || state;
+        if (current?.pane?.isConnected && current.mode === "abstract") {
+          this.preserveReaderAlphaXivSurface(state.reader, "abstract");
+        }
+        this.renderReaderAlphaXivPane(current);
       }).catch((error) => {
         state.statusMessage = error?.message || "无法打开 AI 对话";
         this.renderReaderAlphaXivPane(state);
       });
     });
+    state.alphaChatButton = aiButton;
     for (let type of ["pointerdown", "mousedown", "mouseup", "pointerup"]) {
       aiButton.addEventListener(type, (event) => {
         event.preventDefault();
@@ -3155,6 +3202,7 @@ var ZoteroAIReading = {
     state.webView = webView;
     state.statusNode = pane.querySelector?.(".zai-reader-alphaxiv-status") || null;
     state.emptyNode = pane.querySelector?.(".zai-reader-alphaxiv-empty") || null;
+    state.alphaChatButton = pane.querySelector?.(".zai-reader-alphaxiv-ai-button") || null;
     // Remove the pre-0.7 fixed selection strip if an upgraded pane survived
     // the version check. Selection actions now live beside the selected range.
     pane.querySelector?.(".zai-reader-alphaxiv-selection")?.remove?.();
@@ -3505,6 +3553,15 @@ var ZoteroAIReading = {
     if (!state?.pane) {
       return;
     }
+    let alphaChatButton = state.alphaChatButton ||
+      state.pane.querySelector?.(".zai-reader-alphaxiv-ai-button") || null;
+    if (alphaChatButton) {
+      let chatOpen = this.isReaderChatPaneOpen(state.reader);
+      alphaChatButton.setAttribute("aria-pressed", String(chatOpen));
+      alphaChatButton.setAttribute("title", chatOpen ? "关闭当前 AI 对话" : "在当前简读旁打开 AI 对话");
+      alphaChatButton.setAttribute("aria-label", chatOpen ? "关闭当前 AI 对话" : "在当前简读旁打开 AI 对话");
+      alphaChatButton.toggleAttribute?.("data-active", chatOpen);
+    }
     for (let button of state.modeButtons || []) {
       let active = button.getAttribute("data-value") === state.mode;
       button.toggleAttribute?.("data-active", active);
@@ -3610,6 +3667,7 @@ var ZoteroAIReading = {
         state.selectionQuestionSend = null;
         state.selectionQuestionDraft = "";
         state.selectionQuestionOpen = false;
+        state.alphaChatButton = null;
         state.modeButtons = [];
         state.languageButtons = [];
         state.selectionContext = null;
@@ -5983,17 +6041,11 @@ var ZoteroAIReading = {
         });
         head.appendChild(title);
         head.appendChild(deleteButton);
-        let preview = doc.createElementNS(this.HTML_NS, "div");
-        preview.className = "zai-reader-chat-history-session-preview";
-        preview.textContent = this.getReaderConversationSessionPreview(session) || "（空会话）";
-        this.enableReaderTextSelection(preview);
         let meta = doc.createElementNS(this.HTML_NS, "div");
         meta.className = "zai-reader-chat-history-meta";
         let time = this.formatReaderChatHistoryTime(session.updatedAt);
-        meta.textContent = (time ? time + " · " : "") +
-          String(session.messages?.length || 0) + " 条消息";
+        meta.textContent = time || "已保存";
         item.appendChild(head);
-        item.appendChild(preview);
         item.appendChild(meta);
         let restore = (event) => {
           if (event.type === "keydown" && !["Enter", " "].includes(event.key)) {
@@ -9389,6 +9441,7 @@ var ZoteroAIReading = {
         ".zai-reader-alphaxiv-segment[data-active]{background:#d34b38;color:#fff;}",
         ".zai-reader-alphaxiv-segment:disabled{opacity:.42;cursor:default;}",
         ".zai-reader-alphaxiv-ai-button{width:auto;min-width:31px;padding:0 7px;color:#147a6c;font-size:11px;font-weight:800;}",
+        ".zai-reader-alphaxiv-ai-button[data-active='true']{background:#147a6c;color:#fff;border-color:#147a6c;}",
         ".zai-reader-alphaxiv-selection{display:none!important;}",
         ".zai-reader-alphaxiv-selection[hidden]{display:none!important;}",
         ".zai-reader-alphaxiv-selection-preview{flex:1;min-width:0;overflow:hidden;color:#5b3029;font-size:11px;text-overflow:ellipsis;white-space:nowrap;}",
@@ -9460,7 +9513,6 @@ var ZoteroAIReading = {
         ".zai-reader-chat-history-item.is-active{border-left-color:#147a6c;background:rgba(20,122,108,.12);}",
         ".zai-reader-chat-history-session-head{display:flex;align-items:center;gap:5px;min-width:0;}",
         ".zai-reader-chat-history-session-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fill-primary,#26322f);}",
-        ".zai-reader-chat-history-session-preview{margin-top:4px;color:var(--fill-primary,#37413f);display:-moz-box;-moz-box-orient:vertical;-moz-line-clamp:3;overflow:hidden;-moz-user-select:text!important;user-select:text!important;}",
         ".zai-reader-chat-history-delete{width:22px;height:22px;min-width:22px;font-size:15px;}",
         ".zai-reader-chat-history-meta{margin-top:4px;color:var(--fill-secondary,#68727d);font-size:10px;font-weight:700;}",
         ".zai-reader-chat-history-empty{padding:10px 2px;color:var(--fill-secondary,#68727d);font-size:11px;}",

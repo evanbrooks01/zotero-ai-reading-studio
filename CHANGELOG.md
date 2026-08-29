@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.8
+
+- Fixed alphaXiv brief AI button clicks being misrouted through the PDF toolbar bridge and returning to the local paper.
+- Made the AI button in the brief a real open/close toggle while preserving the brief surface.
+- Simplified per-paper history rows to show only each session's first user question, without assistant reply previews.
+
 ## 0.7.7
 
 - Independent project metadata, extension identity, update feed, and release path.

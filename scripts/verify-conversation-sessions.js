@@ -19,6 +19,7 @@ async function run() {
   first.responseIDs = ["resp-first"];
   first.previousResponseID = "resp-first";
   assert.strictEqual(sut.getReaderConversationSessionTitle(first), "Summarize the method");
+  assert.strictEqual(sut.getReaderConversationSessionPreview(first), "Summarize the method");
   const state = {
     loaded: true,
     ownerItem: { id: 10, libraryID: 1, deleted: false },

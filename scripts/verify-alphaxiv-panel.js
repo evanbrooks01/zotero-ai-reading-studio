@@ -129,6 +129,34 @@ function verifyReadingSurfaceSwitch() {
   }
 }
 
+function verifyToolbarBridgeIsolation() {
+  const pane = {
+    classList: { contains: (name) => name === "zai-reader-ai-pane" },
+    parentNode: null
+  };
+  const panelButton = {
+    classList: { contains: () => false },
+    parentNode: pane,
+    getAttribute: () => ""
+  };
+  assert.strictEqual(
+    sut.isReaderAuxiliaryPanelEvent({
+      target: panelButton,
+      composedPath: () => [panelButton, pane]
+    }),
+    true
+  );
+  const pdfTarget = {
+    classList: { contains: () => false },
+    parentNode: null,
+    getAttribute: () => ""
+  };
+  assert.strictEqual(
+    sut.isReaderAuxiliaryPanelEvent({ target: pdfTarget, composedPath: () => [pdfTarget] }),
+    false
+  );
+}
+
 function verifyExistingPaneAdoptionAndBlankDetection() {
   const webView = {
     currentURI: { spec: "about:blank" },
@@ -251,7 +279,7 @@ function verifyPanelContract() {
   assert.doesNotMatch(paneSource, /"翻译"/);
   assert.match(paneSource, /zai-reader-alphaxiv-mode-label/);
   assert.match(paneSource, /zai-reader-alphaxiv-ai-button/);
-  assert.match(source, /selection-question-2/);
+  assert.match(source, /selection-question-3/);
   assert.match(paneSource, /data-zai-selection-action/);
   assert.match(paneSource, /围绕选区提问/);
   assert.match(paneSource, /makeSegment\("en", "English", "language"/);
@@ -279,6 +307,8 @@ function verifyPanelContract() {
   assert.match(source, /handleReaderAlphaXivFrameQuestion/);
   assert.match(source, /zai-reader-translation-settings-button/);
   assert.match(source, /zai-reader-translation-settings-panel/);
+  assert.match(source, /isReaderAuxiliaryPanelEvent/);
+  assert.match(paneSource, /toggleReaderChatPane\(state\.reader/);
 
   const refreshStart = source.indexOf("async refreshReaderAlphaXivPane");
   const refreshEnd = source.indexOf("\n  renderReaderAlphaXivPane(state) {", refreshStart);
@@ -296,6 +326,7 @@ verifyArXivIdentity();
 verifyRoutesAndDefaults();
 verifySelectionContext();
 verifyReadingSurfaceSwitch();
+verifyToolbarBridgeIsolation();
 verifyExistingPaneAdoptionAndBlankDetection();
 verifyPanelContract();
 console.log("alphaXiv panel checks passed");

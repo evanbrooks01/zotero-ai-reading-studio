@@ -68,7 +68,7 @@ These are text placeholders rather than stale screenshots. See [`docs/screenshot
 3. Open `Edit -> Settings -> AI Reading Assistant` and enter your API URL and key.
 4. Use the `AI`, translation, or brief button in the PDF reader toolbar.
 
-The current release is also available directly: [zotero-ai-reading-0.7.7.xpi](https://github.com/Shanfu2021/zotero-ai-reading-studio/releases/download/v0.7.7/zotero-ai-reading-0.7.7.xpi).
+The current release is also available directly: [zotero-ai-reading-0.7.8.xpi](https://github.com/Shanfu2021/zotero-ai-reading-studio/releases/download/v0.7.8/zotero-ai-reading-0.7.8.xpi).
 
 ## Configuration
 
