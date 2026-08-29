@@ -1,0 +1,123 @@
+<vbox xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml">
+  <groupbox style="max-width: 780px; padding: 16px 18px 18px;">
+    <html:style>
+      .zai-title { font-size: 21px; margin: 2px 0 4px; }
+      .zai-sec { font-size: 15px; font-weight: 700; color: #147a6c;
+        margin: 18px 0 9px; padding-bottom: 5px;
+        border-bottom: 1px solid rgba(128, 128, 128, .25); }
+      .zai-hint { color: #68727d; font-size: 12px; line-height: 1.55; margin: 3px 0 10px; max-width: 54em; }
+      .zai-row { margin: 0 0 10px; }
+      .zai-label { min-width: 8.5em; }
+      .zai-input { width: 34em; }
+      .zai-small-input { width: 9em; }
+      .zai-wide-check { margin-top: 4px; }
+      .zai-status[data-state="error"] { color: #b42318; }
+      .zai-status[data-state="success"] { color: #147a6c; }
+    </html:style>
+
+    <label>
+      <html:h2 class="zai-title">Zotero AI Reading Studio</html:h2>
+    </label>
+    <html:div class="zai-hint">
+      Open the native reading panel from the PDF toolbar. Conversations are saved as child notes of the paper.
+    </html:div>
+
+    <html:div class="zai-sec">AI service</html:div>
+
+    <hbox align="center" class="zai-row">
+      <label value="API URL:" class="zai-label"/>
+      <html:input type="text" class="zai-input" placeholder="https://api.example.com"
+        preference="extensions.zotero-ai-reading.translationAPIURL"/>
+    </hbox>
+
+    <hbox align="center" class="zai-row">
+      <label value="API key:" class="zai-label"/>
+      <html:input type="password" class="zai-input"
+        preference="extensions.zotero-ai-reading.translationAPIKey"/>
+    </hbox>
+
+    <hbox align="center" class="zai-row">
+      <label value="Reading model:" class="zai-label"/>
+      <html:input id="zai-chat-model" type="text" class="zai-input" list="zai-chat-models"
+        onfocus="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.populateChatModelChoices(document)"
+        preference="extensions.zotero-ai-reading.chatModel"/>
+      <button id="zai-refresh-translation-models" label="Refresh models"
+        oncommand="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.refreshTranslationModels(document)"/>
+    </hbox>
+    <html:datalist id="zai-chat-models"></html:datalist>
+
+    <html:div class="zai-sec">Chat and retrieval</html:div>
+
+    <hbox align="center" class="zai-row">
+      <label value="Reading reasoning:" class="zai-label"/>
+      <menulist native="true" preference="extensions.zotero-ai-reading.chatReasoningMode" style="min-width: 26em;">
+        <menupopup>
+          <menuitem value="low" label="low"/>
+          <menuitem value="medium" label="medium"/>
+          <menuitem value="high" label="high"/>
+          <menuitem value="xhigh" label="xhigh"/>
+          <menuitem value="max" label="max (gpt-5.6 only)"/>
+        </menupopup>
+      </menulist>
+    </hbox>
+
+    <hbox align="center" class="zai-row">
+      <label value="" class="zai-label"/>
+      <checkbox native="true" label="Preselect PDF attachment for the next message"
+        preference="extensions.zotero-ai-reading.paperSearchEnabled"/>
+      <checkbox native="true" label="Allow web search by default"
+        preference="extensions.zotero-ai-reading.webSearchEnabled"/>
+    </hbox>
+    <html:div class="zai-hint">
+      The PDF toggle attaches the local document once per conversation. Later turns reuse Responses state or Zotero local retrieval. Web retrieval uses Responses web_search.
+    </html:div>
+
+    <html:div class="zai-sec">Selection translation</html:div>
+
+    <html:div class="zai-hint">
+      Translation model and reasoning are global settings shared by all papers. They are independent from the reading assistant model and can also be changed from the translation panel's gear button.
+    </html:div>
+
+    <hbox align="center" class="zai-row">
+      <label value="Translation model:" class="zai-label"/>
+      <html:input id="zai-translation-model" type="text" class="zai-input" list="zai-translation-models"
+        onfocus="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.populateTranslationModelChoices(document)"
+        preference="extensions.zotero-ai-reading.translationModel"/>
+    </hbox>
+    <html:datalist id="zai-translation-models"></html:datalist>
+
+    <hbox align="center" class="zai-row">
+      <label value="Translation reasoning:" class="zai-label"/>
+      <menulist native="true" preference="extensions.zotero-ai-reading.translationReasoningMode" style="min-width: 26em;">
+        <menupopup>
+          <menuitem value="low" label="low"/>
+          <menuitem value="medium" label="medium"/>
+          <menuitem value="high" label="high"/>
+          <menuitem value="xhigh" label="xhigh"/>
+          <menuitem value="max" label="max (gpt-5.6 only)"/>
+        </menupopup>
+      </menulist>
+    </hbox>
+
+    <hbox align="center" class="zai-row">
+      <label value="" class="zai-label"/>
+      <checkbox native="true" label="Enable PDF selection translation"
+        preference="extensions.zotero-ai-reading.translationEnabled"/>
+      <checkbox native="true" class="zai-wide-check" label="Translate automatically after selection"
+        preference="extensions.zotero-ai-reading.translationAuto"/>
+    </hbox>
+
+    <hbox align="center" class="zai-row">
+      <label value="Target language:" class="zai-label"/>
+      <html:input type="text" class="zai-small-input"
+        preference="extensions.zotero-ai-reading.translationTargetLanguage"/>
+      <label value="Chunk size:" style="margin-left: 24px; min-width: 8em;"/>
+      <html:input type="number" min="100" max="30000" step="100" class="zai-small-input"
+        preference="extensions.zotero-ai-reading.translationMaxChars"/>
+    </hbox>
+    <html:div id="zai-translation-status" class="zai-hint zai-status">
+      Chat and translation use /v1/responses. Conversations are stored in Zotero child notes.
+    </html:div>
+  </groupbox>
+</vbox>

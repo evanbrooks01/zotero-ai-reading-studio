@@ -1,0 +1,33 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+
+# Secrets and local credentials. Never commit Zotero profile exports or keys.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+*secret*
+
+# Generated packages and local diagnostics
+dist/
+*.xpi
+*.zip
+zai-diag*.js
+zai-diag*.json
+scripts/*-result.json
+
+# Legacy/local screenshots are not part of the public release.
+image/
+
+# Local dependency/cache directories
+node_modules/
+.pytest_cache/
+__pycache__/

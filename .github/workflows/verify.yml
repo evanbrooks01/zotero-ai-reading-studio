@@ -1,0 +1,24 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax check
+        run: node --check zotero-ai-reading.js
+      - name: Contract checks
+        run: |
+          node scripts/verify-alphaxiv-panel.js
+          node scripts/verify-reader-chat.js
+          node scripts/verify-conversation-sessions.js
+          node scripts/verify-selection-translation.js
+          node scripts/verify-detachable-panels.js
+          node scripts/verify-reader-pane-upload.js
