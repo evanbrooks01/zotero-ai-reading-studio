@@ -155,6 +155,26 @@ function verifyToolbarBridgeIsolation() {
     sut.isReaderAuxiliaryPanelEvent({ target: pdfTarget, composedPath: () => [pdfTarget] }),
     false
   );
+
+  const originalAlphaOpen = sut.isReaderAlphaXivPaneOpen;
+  try {
+    sut.isReaderAlphaXivPaneOpen = () => true;
+    const alphaOverlay = {
+      getAttribute(name) {
+        return name === "data-zai-reader-toolbar-overlay"
+          ? "true"
+          : (name === "data-zai-toolbar-button-id" ? sut.READER_ALPHAXIV_BUTTON_ID : "");
+      },
+      parentNode: null
+    };
+    assert.strictEqual(
+      sut.isReaderAuxiliaryPanelEvent({ target: alphaOverlay, composedPath: () => [alphaOverlay] }, {}),
+      true
+    );
+  }
+  finally {
+    sut.isReaderAlphaXivPaneOpen = originalAlphaOpen;
+  }
 }
 
 function verifyExistingPaneAdoptionAndBlankDetection() {
@@ -308,6 +328,9 @@ function verifyPanelContract() {
   assert.match(source, /zai-reader-translation-settings-button/);
   assert.match(source, /zai-reader-translation-settings-panel/);
   assert.match(source, /isReaderAuxiliaryPanelEvent/);
+  assert.match(source, /isReaderAlphaXivSurfaceActive/);
+  assert.match(source, /data-zai-reader-toolbar-overlay/);
+  assert.match(source, /toolbar's "简读" button/);
   assert.match(paneSource, /toggleReaderChatPane\(state\.reader/);
 
   const refreshStart = source.indexOf("async refreshReaderAlphaXivPane");

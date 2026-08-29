@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.9
+
+- Prevented transparent PDF toolbar overlays from intercepting the alphaXiv brief's AI button.
+- Kept the brief surface active when opening or closing the local AI pane.
+- Added a regression check for toolbar-overlay event isolation.
+
 ## 0.7.8
 
 - Fixed alphaXiv brief AI button clicks being misrouted through the PDF toolbar bridge and returning to the local paper.

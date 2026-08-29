@@ -1135,6 +1135,15 @@ var ZoteroAIReading = {
       for (let node of path) {
         let current = node;
         for (let depth = 0; current && depth < 14; depth++) {
+          // Transparent toolbar overlays are mounted in the outer reader
+          // document and can sit above the alphaXiv header. Once the brief is
+          // visible, an overlay hit must never be interpreted as a second
+          // click on the toolbar's "简读" button.
+          if (current.getAttribute?.("data-zai-reader-toolbar-overlay") === "true" &&
+              current.getAttribute?.("data-zai-toolbar-button-id") === this.READER_ALPHAXIV_BUTTON_ID &&
+              this.isReaderAlphaXivSurfaceActive(reader)) {
+            return true;
+          }
           if (current.classList?.contains?.("zai-reader-ai-pane")) {
             return true;
           }
@@ -1236,6 +1245,15 @@ var ZoteroAIReading = {
           if (!targetButton) {
             return;
           }
+          if (targetButton.id === this.READER_ALPHAXIV_BUTTON_ID &&
+              this.isReaderAlphaXivSurfaceActive(reader)) {
+            // The alphaXiv header occupies the same top strip as the native
+            // PDF toolbar. Ignore a retargeted toolbar hit while the brief is
+            // already visible; its explicit x button is the route back to PDF.
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            return;
+          }
           event.preventDefault?.();
           event.stopPropagation?.();
           this.runReaderToolbarButton(reader, targetButton);
@@ -1325,6 +1343,8 @@ var ZoteroAIReading = {
           ? doc.createXULElement("button")
           : doc.createElementNS(this.HTML_NS, "button");
         overlay.id = this.getReaderToolbarButtonOverlayID(reader, button);
+        overlay.setAttribute("data-zai-reader-toolbar-overlay", "true");
+        overlay.setAttribute("data-zai-toolbar-button-id", button.id || "");
         let isTranslation = button.id === this.READER_TRANSLATION_BUTTON_ID;
         let isAlphaXiv = button.id === this.READER_ALPHAXIV_BUTTON_ID;
         let label = isTranslation ? "译" : (isAlphaXiv ? "简读" : "AI");
@@ -1339,6 +1359,13 @@ var ZoteroAIReading = {
         let run = (event) => {
           try {
             if (!this.isLeftActivationEvent(event)) {
+              return;
+            }
+            if (this.isReaderAuxiliaryPanelEvent(event, reader) ||
+                (button.id === this.READER_ALPHAXIV_BUTTON_ID && this.isReaderAlphaXivSurfaceActive(reader))) {
+              event?.preventDefault?.();
+              event?.stopImmediatePropagation?.();
+              event?.stopPropagation?.();
               return;
             }
             event?.preventDefault?.();
@@ -2667,6 +2694,23 @@ var ZoteroAIReading = {
     }
     catch (_) {}
     return true;
+  },
+
+  isReaderAlphaXivSurfaceActive(reader) {
+    // Prefer in-memory state when an outer-document event is retargeted away
+    // from the XUL pane. This covers the brief header even if its bounding
+    // rectangle cannot be resolved in the event's coordinate space.
+    try {
+      let state = this.readerAlphaXivStates.get(reader);
+      let pane = state?.pane;
+      let connected = Boolean(pane && (pane.isConnected !== false) && (pane.isConnected || pane.parentNode));
+      if (connected && state.mode === "abstract" && !pane.hidden &&
+          !pane.hasAttribute?.("hidden") && !pane.hasAttribute?.("data-zai-alpha-surface-hidden")) {
+        return true;
+      }
+    }
+    catch (_) {}
+    return this.isReaderAlphaXivPaneOpen(reader);
   },
 
   updateReaderToolbarButtonState(reader) {
