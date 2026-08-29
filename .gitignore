@@ -24,7 +24,7 @@ zai-diag*.js
 zai-diag*.json
 scripts/*-result.json
 
-# Legacy/local screenshots are not part of the public release.
+# Keep raw local captures private; sanitized copies live under docs/screenshots/.
 image/
 docs/screenshots/_*.png
 
