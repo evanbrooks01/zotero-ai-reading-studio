@@ -46,20 +46,37 @@
 - 打开或关闭面板时保留 PDF 的阅读位置；流式回答期间不会强制滚动阅读页面。
 - AI 输出失败或连接超时时会保留明确的错误消息，不会留下空的“正在生成”气泡。
 
-## 使用截图（待补）
+## 使用截图
 
-README 为当前版本预留了下面的截图位置。你可以用自己的 Zotero 界面截图替换这些占位；文件请放到 `docs/screenshots/` 并使用表中的文件名。截图前请清空或遮盖 API URL、Key、账号和本地文件路径。
+下面的截图来自当前项目版本，覆盖从设置到论文阅读、翻译和简读提问的完整流程。截图中的 API URL 和 Key 已打码；真实凭据只应保存在本机 Zotero 设置中。
 
-| 文件名 | 建议截图内容 |
-| --- | --- |
-| `01-settings.png` | `编辑 -> 设置 -> AI Reading Assistant`：API 字段（留空或打码）、阅读模型/官方 reasoning，以及独立的翻译模型/reasoning。 |
-| `02-reader-ai.png` | PDF 阅读器中的 AI 面板：模型选择、检索开关、附加当前 PDF、流式 Markdown 回复。 |
-| `03-translation.png` | 左侧翻译面板：选区原文、译文、翻译模型设置按钮，以及“放入对话”按钮。 |
-| `04-translation-to-chat.png` | 点击“放入对话”后的 AI 面板：选中的原文和译文作为当前论文会话上下文。 |
-| `05-brief-question.png` | alphaXiv 简读页面释放选区后，选区附近自动出现的本地“提问”编辑器。 |
-| `06-history.png` | AI 面板的历史会话列表：同一篇论文的多个会话、首问标题、切换和删除入口。 |
+### 1. 分离阅读与翻译模型
 
-当前这些是文字占位，不会伪造旧版截图。完整的截图尺寸、命名和替换说明见 [`docs/screenshots/README.md`](docs/screenshots/README.md)。
+在 `编辑 -> 设置 -> AI Reading Assistant` 中，阅读模型和翻译模型可以分别配置。阅读默认使用 `gpt-5.6-sol`，翻译可以选择更轻量的模型和独立 reasoning effort。
+
+![AI Reading Assistant 设置与模型配置](docs/screenshots/01-settings.png)
+
+### 2. PDF 阅读与检索
+
+阅读面板固定在右侧，可以选择阅读模型、官方 reasoning effort，按需开启检索或附加当前 PDF。
+
+![PDF 阅读 AI 面板与检索开关](docs/screenshots/02-reader-ai.png)
+
+### 3. 选区翻译并加入会话
+
+翻译面板默认停靠左侧，显示原文和译文。点击“放入对话”即可把当前选区及译文加入这篇论文的当前会话。
+
+![选区翻译与放入对话按钮](docs/screenshots/03-translation.png)
+
+![加入论文会话后的 PDF 选区上下文](docs/screenshots/04-translation-to-chat.png)
+
+### 4. 在线简读中的选区提问
+
+简读保留网页中的图片、公式和作者整理内容。释放选区后，提问编辑器会在选区附近出现，并通过本项目配置的 Responses API 进入论文会话。
+
+![alphaXiv 简读页面的选区提问编辑器](docs/screenshots/05-brief-question.png)
+
+历史会话按论文分别保存；发送第一条消息后才会出现在右侧 AI 面板的历史列表中，列表只显示每个会话的第一句话，点击后可恢复完整对话。截图清单和更新规范见 [`docs/screenshots/README.md`](docs/screenshots/README.md)。
 
 ## 安装
 

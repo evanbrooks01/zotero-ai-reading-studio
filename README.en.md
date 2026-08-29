@@ -46,20 +46,37 @@ An independently maintained Zotero workspace for paper reading. It keeps Zotero 
 - Opening or closing a pane preserves the PDF reading position, and streaming answers do not force-scroll the document.
 - Failed or timed-out requests leave an explicit error message instead of an empty permanent “generating” bubble.
 
-## Usage screenshots (placeholders)
+## Usage screenshots
 
-The current README reserves the screenshot slots below. Replace each placeholder with your own Zotero screenshot under `docs/screenshots/`, using the filenames in the table. Clear or redact API URLs, keys, account names, and local file paths before committing screenshots.
+These screenshots are from the current project version and cover setup, PDF reading, translation, and contextual questions. API URLs and keys are redacted; real credentials belong only in local Zotero preferences.
 
-| File | Suggested capture |
-| --- | --- |
-| `01-settings.png` | `Edit -> Settings -> AI Reading Assistant`: blank/redacted API fields, reading model and official reasoning, plus separate translation model/reasoning. |
-| `02-reader-ai.png` | The AI pane beside a PDF: model selector, retrieval toggle, attach-current-PDF control, and a streamed Markdown answer. |
-| `03-translation.png` | The left translation pane: source selection, translated text, translation settings button, and the “Add to chat” action. |
-| `04-translation-to-chat.png` | The AI pane after “Add to chat”, showing the selected source and translation included in the current paper session. |
-| `05-brief-question.png` | The local contextual question editor that appears beside a released selection in the alphaXiv brief. |
-| `06-history.png` | The history list with multiple sessions for one paper, first-question titles, switch, and delete controls. |
+### 1. Separate reading and translation models
 
-These are text placeholders rather than stale screenshots. See [`docs/screenshots/README.md`](docs/screenshots/README.md) for capture dimensions, naming, and replacement instructions.
+Configure independent models and official reasoning effort values in `Edit -> Settings -> AI Reading Assistant`.
+
+![AI Reading Assistant settings](docs/screenshots/01-settings.png)
+
+### 2. PDF reading and retrieval
+
+The reading pane stays docked on the right and exposes the model, reasoning effort, retrieval toggle, and optional current-PDF attachment.
+
+![PDF reading AI pane](docs/screenshots/02-reader-ai.png)
+
+### 3. Translate a selection and add it to chat
+
+The translation pane is docked on the left by default. Its `Add to chat` action adds the selected source and translation to the current paper session.
+
+![Selection translation](docs/screenshots/03-translation.png)
+
+![Translation added to the paper conversation](docs/screenshots/04-translation-to-chat.png)
+
+### 4. Ask about a selection in the online brief
+
+The online brief keeps its figures, formulas, and author-curated material. Releasing a selection opens the local question editor beside it and routes the question through this project's Responses API.
+
+![Contextual question editor in the alphaXiv brief](docs/screenshots/05-brief-question.png)
+
+Conversation history is stored per paper. A session appears after its first message and is listed by that first question; selecting it restores the full conversation. See [`docs/screenshots/README.md`](docs/screenshots/README.md) for the screenshot inventory.
 
 ## Install
 
