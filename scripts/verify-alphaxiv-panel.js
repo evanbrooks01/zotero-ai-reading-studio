@@ -233,6 +233,66 @@ function verifyToolbarOverlaySuspension() {
   }
 }
 
+function verifyAlphaXivBoundsClamping() {
+  const styleValues = new Map();
+  const attributes = new Map();
+  const pane = {
+    isConnected: true,
+    style: {
+      setProperty(name, value) {
+        styleValues.set(name, String(value));
+      }
+    },
+    setAttribute(name, value) {
+      attributes.set(name, String(value));
+    },
+    removeAttribute(name) {
+      attributes.delete(name);
+    },
+    ownerDocument: {
+      documentElement: {
+        getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 700 })
+      },
+      defaultView: { innerWidth: 1000, innerHeight: 700 }
+    }
+  };
+  const container = {
+    getBoundingClientRect: () => ({
+      left: 100, top: 50, right: 1200, bottom: 800, width: 1100, height: 750
+    })
+  };
+  const primary = {
+    getBoundingClientRect: () => ({
+      left: 150, top: 80, right: 1150, bottom: 760, width: 1000, height: 680
+    })
+  };
+  const state = { reader: {}, pane };
+  const originals = {
+    getReaderChromeWrapper: sut.getReaderChromeWrapper,
+    getReaderPrimaryLayoutNode: sut.getReaderPrimaryLayoutNode
+  };
+  try {
+    sut.getReaderChromeWrapper = () => container;
+    sut.getReaderPrimaryLayoutNode = () => primary;
+    assert.strictEqual(sut.syncReaderAlphaXivOverlayBounds(state), true);
+    assert.strictEqual(styleValues.get("left"), "50px");
+    assert.strictEqual(styleValues.get("top"), "30px");
+    assert.strictEqual(styleValues.get("width"), "850px");
+    assert.strictEqual(styleValues.get("height"), "620px");
+    assert.strictEqual(attributes.has("data-zai-compact-header"), false);
+
+    pane.ownerDocument.documentElement.getBoundingClientRect = () => ({
+      left: 0, top: 0, right: 590, bottom: 700
+    });
+    assert.strictEqual(sut.syncReaderAlphaXivOverlayBounds(state), true);
+    assert.strictEqual(styleValues.get("width"), "440px");
+    assert.strictEqual(attributes.get("data-zai-compact-header"), "true");
+  }
+  finally {
+    Object.assign(sut, originals);
+  }
+}
+
 function verifyExistingPaneAdoptionAndBlankDetection() {
   const webView = {
     currentURI: { spec: "about:blank" },
@@ -355,7 +415,9 @@ function verifyPanelContract() {
   assert.doesNotMatch(paneSource, /"翻译"/);
   assert.match(paneSource, /zai-reader-alphaxiv-mode-label/);
   assert.match(paneSource, /zai-reader-alphaxiv-ai-button/);
-  assert.match(source, /selection-question-3/);
+  assert.match(source, /stable-header-1/);
+  assert.match(paneSource, /data-zai-reliable-control/);
+  assert.match(paneSource, /lastPointerActivation/);
   assert.match(paneSource, /data-zai-selection-action/);
   assert.match(paneSource, /围绕选区提问/);
   assert.match(paneSource, /makeSegment\("en", "English", "language"/);
@@ -388,7 +450,23 @@ function verifyPanelContract() {
   assert.match(source, /data-zai-reader-toolbar-overlay/);
   assert.match(source, /data-zai-toolbar-overlay-suspended/);
   assert.match(source, /syncReaderToolbarButtonOverlays/);
-  assert.match(source, /min-width:42px/);
+  assert.match(source, /\.zai-reader-alphaxiv-pane\[data-zai-central-reading-surface='true'\]\{display:flex!important/);
+  assert.match(source, /\.zai-reader-alphaxiv-header\{display:flex!important;position:relative!important/);
+  assert.match(source, /\.zai-reader-alphaxiv-identity\{display:flex;position:relative;z-index:61/);
+  assert.match(source, /\.zai-reader-alphaxiv-controls\{display:flex!important;position:relative!important/);
+  assert.match(source, /width:340px!important;height:30px!important/);
+  assert.match(source, /\.zai-reader-alphaxiv-content\{display:flex!important;position:relative!important/);
+  assert.match(source, /\.zai-reader-alphaxiv-browser\{display:block!important;position:relative!important/);
+  assert.match(source, /data-zai-compact-header/);
+  assert.match(source, /width:48px!important/);
+  const toolbarBridgeStart = source.indexOf("  attachReaderToolbarButtonClickBridge(reader, button) {");
+  const toolbarBridgeEnd = source.indexOf("\n  detachReaderToolbarButtonClickBridge", toolbarBridgeStart);
+  const toolbarBridgeSource = source.slice(toolbarBridgeStart, toolbarBridgeEnd);
+  assert.ok(
+    toolbarBridgeSource.indexOf("this.isReaderAlphaXivSurfaceActive(reader)") <
+      toolbarBridgeSource.indexOf("this.isReaderAuxiliaryPanelEvent(event, reader)"),
+    "the PDF toolbar bridge must yield before interpreting brief header events"
+  );
   assert.match(source, /older add-on version may still carry the old/);
   assert.match(source, /toolbar's "简读" button/);
   assert.match(paneSource, /toggleReaderChatPane\(state\.reader/);
@@ -411,6 +489,7 @@ verifySelectionContext();
 verifyReadingSurfaceSwitch();
 verifyToolbarBridgeIsolation();
 verifyToolbarOverlaySuspension();
+verifyAlphaXivBoundsClamping();
 verifyExistingPaneAdoptionAndBlankDetection();
 verifyPanelContract();
 console.log("alphaXiv panel checks passed");

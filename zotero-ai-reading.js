@@ -29,7 +29,7 @@ var ZoteroAIReading = {
   READER_BUTTON_ID: "zotero-ai-reading-reader-button",
   READER_TRANSLATION_BUTTON_ID: "zotero-ai-reading-translation-button",
   READER_ALPHAXIV_BUTTON_ID: "zotero-ai-reading-alphaxiv-button",
-  READER_ALPHAXIV_UI_VERSION: "selection-question-3",
+  READER_ALPHAXIV_UI_VERSION: "stable-header-1",
   CHAT_NOTE_MARKER: "ZAI_CHAT_V1:",
   CHAT_NOTE_VERSION: 3,
   _readerConversationCounter: 0,
@@ -1220,6 +1220,13 @@ var ZoteroAIReading = {
           if (!this.isLeftActivationEvent(event)) {
             return;
           }
+          // The native PDF toolbar is completely covered while the online
+          // brief is active. Disable its coordinate bridge for the whole
+          // surface, not just the similarly placed "简读" button, so no
+          // retargeted header control can be mistaken for AI or translation.
+          if (this.isReaderAlphaXivSurfaceActive(reader)) {
+            return;
+          }
           if (this.isReaderAuxiliaryPanelEvent(event, reader)) {
             return;
           }
@@ -1243,14 +1250,6 @@ var ZoteroAIReading = {
               y <= buttonRect.bottom;
           });
           if (!targetButton) {
-            return;
-          }
-          if (targetButton.id === this.READER_ALPHAXIV_BUTTON_ID &&
-              this.isReaderAlphaXivSurfaceActive(reader)) {
-            // The alphaXiv header occupies the same top strip as the native
-            // PDF toolbar. Do not toggle the local PDF surface for an
-            // ambiguous retargeted hit, but also do not cancel the event: the
-            // real brief control still needs a chance to receive its click.
             return;
           }
           event.preventDefault?.();
@@ -1367,8 +1366,8 @@ var ZoteroAIReading = {
             if (!this.isLeftActivationEvent(event)) {
               return;
             }
-            if (this.isReaderAuxiliaryPanelEvent(event, reader) ||
-                (button.id === this.READER_ALPHAXIV_BUTTON_ID && this.isReaderAlphaXivSurfaceActive(reader))) {
+            if (this.isReaderAlphaXivSurfaceActive(reader) ||
+                this.isReaderAuxiliaryPanelEvent(event, reader)) {
               // The overlay is inert while the brief is visible. Leave the
               // event uncancelled so a retargeted HTML control can handle it.
               return;
@@ -3093,51 +3092,59 @@ var ZoteroAIReading = {
       }
       return element;
     };
+    let bindReliableControl = (button, callback) => {
+      let lastPointerActivation = 0;
+      let consume = (event) => {
+        event?.preventDefault?.();
+        event?.stopImmediatePropagation?.();
+        event?.stopPropagation?.();
+      };
+      button.setAttribute("data-zai-reliable-control", "true");
+      // Run on pointerdown, before opening a side panel or reloading a language
+      // can resize the central surface underneath the pointer. The later click
+      // remains as the keyboard/accessibility fallback and is de-duplicated.
+      button.addEventListener("pointerdown", (event) => {
+        if (!this.isLeftActivationEvent(event) || button.disabled) {
+          return;
+        }
+        consume(event);
+        lastPointerActivation = Date.now();
+        try {
+          button.focus?.({ preventScroll: true });
+        }
+        catch (_) {
+          button.focus?.();
+        }
+        callback(event);
+      }, true);
+      button.addEventListener("click", (event) => {
+        consume(event);
+        if (button.disabled || Date.now() - lastPointerActivation < 800) {
+          return;
+        }
+        callback(event);
+      }, true);
+      return button;
+    };
     let makeIconButton = (label, title, callback) => {
       let button = makeHTML("button", "zai-reader-chat-icon", label);
       button.type = "button";
       button.title = title;
       button.setAttribute("aria-label", title);
-      button.addEventListener("pointerdown", (event) => {
-        // Stop the outer reader bridge from seeing the gesture, but do not
-        // cancel the browser's default pointer-to-click synthesis. Cancelling
-        // pointerdown can make a normal press fail to produce a click in
-        // Gecko/XUL reader windows.
-        event.stopImmediatePropagation?.();
-        event.stopPropagation();
-      }, true);
-      // Run the callback in the target phase and consume the event completely.
-      // A native reader toolbar can otherwise see the same click after the
-      // HTML control handles it and toggle the local PDF surface.
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation?.();
-        event.stopPropagation();
-        callback(event);
-      }, true);
-      return button;
+      return bindReliableControl(button, callback);
     };
     let makeSegment = (value, label, kind, callback) => {
       let button = makeHTML("button", "zai-reader-alphaxiv-segment", label);
       button.type = "button";
       button.setAttribute("data-value", value);
       button.setAttribute("data-kind", kind);
-      button.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      }, true);
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation?.();
-        event.stopPropagation();
-        callback(event);
-      }, true);
-      return button;
+      return bindReliableControl(button, callback);
     };
 
     let pane = makeXUL("vbox", "zai-reader-ai-pane zai-reader-alphaxiv-pane");
     pane.id = this.getReaderAlphaXivPaneID(reader);
     pane.setAttribute("data-zai-pane-mode", "alphaxiv");
+    pane.setAttribute("orient", "vertical");
     let header = makeHTML("header", "zai-reader-alphaxiv-header");
     let identity = makeHTML("div", "zai-reader-alphaxiv-identity");
     identity.appendChild(makeHTML("span", "zai-reader-alphaxiv-badge", "αX"));
@@ -3362,10 +3369,47 @@ var ZoteroAIReading = {
       if (!containerRect || !primaryRect || primaryRect.width <= 0 || primaryRect.height <= 0) {
         return false;
       }
-      state.pane.style.setProperty("left", Math.max(0, primaryRect.left - containerRect.left) + "px", "important");
-      state.pane.style.setProperty("top", Math.max(0, primaryRect.top - containerRect.top) + "px", "important");
-      state.pane.style.setProperty("width", primaryRect.width + "px", "important");
-      state.pane.style.setProperty("height", primaryRect.height + "px", "important");
+      let doc = state.pane.ownerDocument;
+      let viewportRect = doc?.documentElement?.getBoundingClientRect?.() || {
+        left: 0,
+        top: 0,
+        right: Number(doc?.defaultView?.innerWidth || containerRect.right),
+        bottom: Number(doc?.defaultView?.innerHeight || containerRect.bottom)
+      };
+      let edge = (rect, name, fallback) => Number.isFinite(Number(rect?.[name]))
+        ? Number(rect[name])
+        : Number(fallback);
+      let containerLeft = edge(containerRect, "left", 0);
+      let containerTop = edge(containerRect, "top", 0);
+      let containerRight = edge(containerRect, "right", containerLeft + Number(containerRect.width || 0));
+      let containerBottom = edge(containerRect, "bottom", containerTop + Number(containerRect.height || 0));
+      let primaryLeft = edge(primaryRect, "left", containerLeft);
+      let primaryTop = edge(primaryRect, "top", containerTop);
+      let primaryRight = edge(primaryRect, "right", primaryLeft + Number(primaryRect.width || 0));
+      let primaryBottom = edge(primaryRect, "bottom", primaryTop + Number(primaryRect.height || 0));
+      let viewportLeft = edge(viewportRect, "left", 0);
+      let viewportTop = edge(viewportRect, "top", 0);
+      let viewportRight = edge(viewportRect, "right", Number(doc?.defaultView?.innerWidth || containerRight));
+      let viewportBottom = edge(viewportRect, "bottom", Number(doc?.defaultView?.innerHeight || containerBottom));
+      let absoluteLeft = Math.max(containerLeft, primaryLeft, viewportLeft);
+      let absoluteTop = Math.max(containerTop, primaryTop, viewportTop);
+      let absoluteRight = Math.min(containerRight, primaryRight, viewportRight);
+      let absoluteBottom = Math.min(containerBottom, primaryBottom, viewportBottom);
+      let width = Math.max(0, absoluteRight - absoluteLeft);
+      let height = Math.max(0, absoluteBottom - absoluteTop);
+      if (width < 1 || height < 1) {
+        return false;
+      }
+      state.pane.style.setProperty("left", Math.max(0, absoluteLeft - containerLeft) + "px", "important");
+      state.pane.style.setProperty("top", Math.max(0, absoluteTop - containerTop) + "px", "important");
+      state.pane.style.setProperty("width", width + "px", "important");
+      state.pane.style.setProperty("height", height + "px", "important");
+      if (width < 620) {
+        state.pane.setAttribute("data-zai-compact-header", "true");
+      }
+      else {
+        state.pane.removeAttribute("data-zai-compact-header");
+      }
       return true;
     }
     catch (error) {
@@ -9542,32 +9586,35 @@ var ZoteroAIReading = {
         ".zai-reader-ai-actions button{min-height:24px;font-size:12px;}",
         ".zai-reader-ai-frame,.zai-reader-ai-browser{display:block!important;flex:1 1 auto!important;width:100%;height:100%;min-width:0;min-height:0;border:0;background:#fff;pointer-events:auto!important;position:relative!important;z-index:21!important;}",
         ".zai-reader-native-chat-pane{background:var(--material-sidepane,#f8faf9);z-index:30!important;isolation:isolate;}",
-        ".zai-reader-alphaxiv-pane[data-zai-central-reading-surface='true']{display:flex!important;position:absolute!important;z-index:10!important;isolation:isolate;min-width:0!important;max-width:none!important;min-height:0!important;background:#f7f9f8;border-left:0;box-shadow:none;}",
+        ".zai-reader-alphaxiv-pane[data-zai-central-reading-surface='true']{display:flex!important;position:absolute!important;z-index:10!important;isolation:isolate;contain:layout paint;min-width:0!important;max-width:none!important;min-height:0!important;overflow:hidden!important;background:#f7f9f8;border-left:0;box-shadow:none;}",
         ".zai-reader-alphaxiv-pane[data-zai-central-reading-surface='true'][hidden]{display:none!important;}",
         ".zai-reader-alphaxiv-pane[data-zai-alpha-surface-hidden='true']{visibility:hidden!important;opacity:0!important;pointer-events:none!important;}",
-        ".zai-reader-alphaxiv-header{display:flex;position:relative;z-index:6;flex:0 0 auto;align-items:center;justify-content:space-between;gap:8px;min-height:52px;padding:6px 8px;border-bottom:1px solid var(--fill-quarternary,rgba(128,128,128,.25));background:var(--material-sidepane,#fff);box-sizing:border-box;pointer-events:auto!important;}",
-        ".zai-reader-alphaxiv-identity{display:flex;align-items:center;gap:7px;min-width:0;}",
+        ".zai-reader-alphaxiv-header{display:flex!important;position:relative!important;z-index:60!important;box-sizing:border-box;width:100%!important;height:58px!important;min-height:58px!important;max-height:58px!important;flex:0 0 58px!important;align-items:center;justify-content:space-between;gap:8px;padding:7px 8px;border-bottom:1px solid var(--fill-quarternary,rgba(128,128,128,.25));overflow:hidden;background:var(--material-sidepane,#fff);pointer-events:auto!important;}",
+        ".zai-reader-alphaxiv-identity{display:flex;position:relative;z-index:61;align-items:center;gap:7px;min-width:0;flex:1 1 auto;overflow:hidden;pointer-events:none;}",
         ".zai-reader-alphaxiv-badge{display:inline-flex;align-items:center;justify-content:center;width:29px;height:25px;flex:0 0 auto;border-radius:5px;background:#d34b38;color:#fff;font-size:11px;font-weight:800;}",
-        ".zai-reader-alphaxiv-identity-text{display:flex;min-width:0;flex-direction:column;line-height:1.2;}",
+        ".zai-reader-alphaxiv-identity-text{display:flex;min-width:0;max-width:180px;flex-direction:column;overflow:hidden;line-height:1.2;}",
         ".zai-reader-alphaxiv-identity-text strong{font-size:12px;}",
         ".zai-reader-alphaxiv-status{max-width:130px;overflow:hidden;color:var(--fill-secondary,#68727d);font-size:10px;text-overflow:ellipsis;white-space:nowrap;}",
-        ".zai-reader-alphaxiv-controls{display:flex;position:relative;z-index:7;align-items:center;justify-content:flex-end;gap:4px;min-width:0;flex-wrap:wrap;pointer-events:auto!important;}",
-        ".zai-reader-alphaxiv-mode-label{display:inline-flex;align-items:center;height:25px;padding:0 6px;border:1px solid rgba(211,75,56,.34);border-radius:4px;background:rgba(211,75,56,.08);color:#8f3024;font-size:11px;font-weight:700;white-space:nowrap;}",
-        ".zai-reader-alphaxiv-segments{display:inline-flex;align-items:center;overflow:hidden;border:1px solid var(--fill-quarternary,rgba(128,128,128,.32));border-radius:4px;background:var(--material-sidepane,#fff);}",
-        ".zai-reader-alphaxiv-segment{height:25px;min-width:46px;padding:2px 8px;border:0;border-right:1px solid var(--fill-quarternary,rgba(128,128,128,.25));background:transparent;color:var(--fill-secondary,#59636d);font-size:11px;cursor:pointer;white-space:nowrap;}",
+        ".zai-reader-alphaxiv-controls{display:flex!important;position:relative!important;z-index:62!important;box-sizing:border-box;width:340px!important;height:30px!important;align-items:center;justify-content:flex-end;gap:3px;min-width:340px!important;max-width:340px!important;flex:0 0 340px!important;flex-wrap:nowrap!important;overflow:visible;pointer-events:auto!important;}",
+        ".zai-reader-alphaxiv-controls button{position:relative;z-index:62;flex:0 0 auto;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation;-moz-user-select:none;user-select:none;}",
+        ".zai-reader-alphaxiv-mode-label{display:inline-flex;align-items:center;box-sizing:border-box;height:30px;padding:0 7px;border:1px solid rgba(211,75,56,.34);border-radius:4px;background:rgba(211,75,56,.08);color:#8f3024;font-size:11px;font-weight:700;white-space:nowrap;}",
+        ".zai-reader-alphaxiv-segments{display:inline-flex;align-items:center;box-sizing:border-box;height:30px;overflow:hidden;border:1px solid var(--fill-quarternary,rgba(128,128,128,.32));border-radius:4px;background:var(--material-sidepane,#fff);}",
+        ".zai-reader-alphaxiv-segment{box-sizing:border-box;width:62px;height:28px;min-width:62px;padding:2px 7px;border:0;border-right:1px solid var(--fill-quarternary,rgba(128,128,128,.25));background:transparent;color:var(--fill-secondary,#59636d);font-size:11px;cursor:pointer;white-space:nowrap;}",
         ".zai-reader-alphaxiv-segment:last-child{border-right:0;}",
         ".zai-reader-alphaxiv-segment[data-active]{background:#d34b38;color:#fff;}",
         ".zai-reader-alphaxiv-segment:disabled{opacity:.42;cursor:default;}",
-        ".zai-reader-alphaxiv-ai-button{width:auto;min-width:42px;min-height:29px;padding:0 10px;color:#147a6c;font-size:11px;font-weight:800;pointer-events:auto!important;touch-action:manipulation;}",
+        ".zai-reader-alphaxiv-controls>.zai-reader-chat-icon{width:34px;height:30px;min-width:34px;min-height:30px;}",
+        ".zai-reader-alphaxiv-ai-button{width:48px!important;min-width:48px!important;height:30px!important;min-height:30px!important;padding:0 10px;color:#147a6c;font-size:11px;font-weight:800;}",
         ".zai-reader-alphaxiv-ai-button[data-active='true']{background:#147a6c;color:#fff;border-color:#147a6c;}",
+        ".zai-reader-alphaxiv-pane[data-zai-compact-header='true'] .zai-reader-alphaxiv-identity-text,.zai-reader-alphaxiv-pane[data-zai-compact-header='true'] .zai-reader-alphaxiv-mode-label{display:none!important;}",
         ".zai-reader-alphaxiv-selection{display:none!important;}",
         ".zai-reader-alphaxiv-selection[hidden]{display:none!important;}",
         ".zai-reader-alphaxiv-selection-preview{flex:1;min-width:0;overflow:hidden;color:#5b3029;font-size:11px;text-overflow:ellipsis;white-space:nowrap;}",
         ".zai-reader-alphaxiv-selection-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto;}",
         ".zai-reader-alphaxiv-action{height:26px;padding:2px 8px;border:1px solid rgba(211,75,56,.42);border-radius:4px;background:var(--material-sidepane,#fff);color:#8f3024;font-size:11px;cursor:pointer;}",
         ".zai-reader-alphaxiv-action-primary{background:#d34b38;color:#fff;}",
-        ".zai-reader-alphaxiv-content{display:flex;position:relative;flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:#fff;}",
-        ".zai-reader-alphaxiv-browser{position:relative!important;z-index:1!important;}",
+        ".zai-reader-alphaxiv-content{display:flex!important;position:relative!important;z-index:1!important;flex:1 1 auto!important;min-width:0;min-height:0;overflow:hidden!important;contain:layout paint;isolation:isolate;background:#fff;}",
+        ".zai-reader-alphaxiv-browser{display:block!important;position:relative!important;z-index:1!important;box-sizing:border-box!important;flex:1 1 auto!important;width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;margin:0!important;border:0!important;}",
         ".zai-reader-alphaxiv-browser[hidden]{display:none!important;}",
         ".zai-reader-alphaxiv-empty{display:flex;position:absolute;inset:0;z-index:2;align-items:center;justify-content:center;padding:24px;background:#f7f9f8;color:var(--fill-secondary,#68727d);font-size:13px;text-align:center;}",
         ".zai-reader-alphaxiv-empty[hidden]{display:none!important;}",

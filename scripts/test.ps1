@@ -1,11 +1,18 @@
 $ErrorActionPreference = "Stop"
 
-node --check zotero-ai-reading.js
-node scripts/verify-alphaxiv-panel.js
-node scripts/verify-reader-chat.js
-node scripts/verify-conversation-sessions.js
-node scripts/verify-selection-translation.js
-node scripts/verify-detachable-panels.js
-node scripts/verify-reader-pane-upload.js
+function Invoke-Node {
+  & node @args
+  if ($LASTEXITCODE -ne 0) {
+    throw "Node check failed with exit code $LASTEXITCODE`: node $($args -join ' ')"
+  }
+}
+
+Invoke-Node --check zotero-ai-reading.js
+Invoke-Node scripts/verify-alphaxiv-panel.js
+Invoke-Node scripts/verify-reader-chat.js
+Invoke-Node scripts/verify-conversation-sessions.js
+Invoke-Node scripts/verify-selection-translation.js
+Invoke-Node scripts/verify-detachable-panels.js
+Invoke-Node scripts/verify-reader-pane-upload.js
 
 Write-Output "All checks passed."

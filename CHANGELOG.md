@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.13
+
+- Rebuilt the alphaXiv header as a fixed hit-test region separated from the remote page, preventing the browser from intermittently covering controls.
+- Activated header controls on the initial pointer press with click de-duplication, so language and AI toggles respond once per press.
+- Stabilized and enlarged the complete header control row, disabled the PDF toolbar bridge throughout brief mode, and clamped the brief to the visible reader viewport.
+
 ## 0.7.12
 
 - Allowed ambiguous alphaXiv toolbar hits to reach the real brief control without cancelling the event or toggling back to the local PDF.
