@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.19
+
+- Replaced the unreliable remote-page brief controls with native Zotero XUL toolbar buttons, using one `command` event per press for language, AI, refresh, external, and PDF actions.
+- Keeps selection capture and contextual questions in the alphaXiv content process while all persistent controls remain in Zotero's stable chrome layer.
+- Rebinds the selection bridge when alphaXiv language navigation replaces the remote content process, so contextual questions continue working after switching Chinese or English.
+- Serializes AI pane toggles and bounds Zotero reader initialization waits, preventing repeated input or a pending reader restore from stalling the control.
+
 ## 0.7.13
 
 - Rebuilt the alphaXiv header as a fixed hit-test region separated from the remote page, preventing the browser from intermittently covering controls.

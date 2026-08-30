@@ -75,6 +75,14 @@ function verifySelectionContext() {
   assert.match(frameScript, /selectionRect/);
   assert.match(frameScript, /selectionViewport/);
   assert.match(frameScript, /zai-alpha-selection-overlay/);
+  assert.match(frameScript, /zai-alpha-reader-toolbar/);
+  assert.match(frameScript, /data-zai-header-action/);
+  assert.match(frameScript, /kind: "header-action"/);
+  assert.match(frameScript, /sync-header/);
+  assert.match(frameScript, /bridgeVersion = messageName \+ ":v9"/);
+  assert.match(frameScript, /attachShadow/);
+  assert.match(frameScript, /let parent = doc\.body \|\| doc\.documentElement/);
+  assert.match(frameScript, /toolbarRect\?\.width >= 80/);
   assert.match(frameScript, /zai-alpha-selection-action/);
   assert.match(frameScript, /selection-question/);
   assert.match(frameScript, /kind:\s*\"selection-question\"/);
@@ -233,6 +241,87 @@ function verifyToolbarOverlaySuspension() {
   }
 }
 
+function verifyRetargetedAlphaXivHeaderRouting() {
+  const reader = {};
+  const activated = [];
+  const makeButton = (text, left, width) => ({
+    textContent: text,
+    hidden: false,
+    disabled: false,
+    contains: () => false,
+    getBoundingClientRect: () => ({ left, top: 20, right: left + width, bottom: 50 }),
+    _zaiReliableActivate(event) {
+      this._zaiReliableLastActivationAt = Date.now();
+      activated.push({ button: text, event });
+      return true;
+    }
+  });
+  const language = makeButton("中文", 100, 60);
+  const english = makeButton("English", 160, 62);
+  const ai = makeButton("AI", 230, 48);
+  const pane = {
+    isConnected: true,
+    hidden: false,
+    hasAttribute: () => false,
+    querySelectorAll: () => [language, english, ai]
+  };
+  const state = { reader, pane, mode: "abstract" };
+  const originalActive = sut.isReaderAlphaXivSurfaceActive;
+  sut.readerAlphaXivStates.set(reader, state);
+  sut.isReaderAlphaXivSurfaceActive = () => true;
+  try {
+    let prevented = false;
+    let stopped = false;
+    const remoteTarget = {};
+    const pointerdown = {
+      type: "pointerdown",
+      button: 0,
+      clientX: 240,
+      clientY: 35,
+      target: remoteTarget,
+      composedPath: () => [remoteTarget],
+      preventDefault: () => { prevented = true; },
+      stopImmediatePropagation: () => { stopped = true; },
+      stopPropagation: () => {}
+    };
+    assert.strictEqual(sut.routeReaderAlphaXivHeaderEvent(reader, pointerdown), true);
+    assert.strictEqual(prevented, true);
+    assert.strictEqual(stopped, true);
+    assert.deepStrictEqual(activated.map((entry) => entry.button), ["AI"]);
+
+    const duplicateClick = {
+      type: "click",
+      button: 0,
+      clientX: 240,
+      clientY: 35,
+      target: remoteTarget,
+      composedPath: () => [remoteTarget],
+      preventDefault: () => {},
+      stopImmediatePropagation: () => {},
+      stopPropagation: () => {}
+    };
+    assert.strictEqual(sut.routeReaderAlphaXivHeaderEvent(reader, duplicateClick), true);
+    assert.deepStrictEqual(activated.map((entry) => entry.button), ["AI"]);
+
+    const realTarget = {
+      type: "pointerdown",
+      button: 0,
+      clientX: 240,
+      clientY: 35,
+      target: ai,
+      composedPath: () => [ai, pane],
+      preventDefault: () => {},
+      stopImmediatePropagation: () => {},
+      stopPropagation: () => {}
+    };
+    assert.strictEqual(sut.routeReaderAlphaXivHeaderEvent(reader, realTarget), false);
+  }
+  finally {
+    sut.isReaderAlphaXivSurfaceActive = originalActive;
+    sut.readerAlphaXivStates.delete(reader);
+  }
+}
+
 function verifyAlphaXivBoundsClamping() {
   const styleValues = new Map();
   const attributes = new Map();
@@ -379,6 +468,8 @@ function verifyPanelContract() {
     "probeAlphaXivAvailability",
     "attachReaderAlphaXivBridge",
     "handleReaderAlphaXivPageStatus",
+    "handleReaderAlphaXivHeaderAction",
+    "syncReaderAlphaXivFrameHeader",
     "askAlphaXivSelection",
     "暂无简读",
     "#popout-assistant-panel"
@@ -407,6 +498,9 @@ function verifyPanelContract() {
   const bridgeSource = source.slice(bridgeStart, bridgeEnd);
   assert.match(bridgeSource, /loadFrameScript\(scriptURL, true\)/);
   assert.match(bridgeSource, /removeDelayedFrameScript/);
+  assert.match(bridgeSource, /bridgeFrameScriptManager !== messageManager/);
+  assert.match(source, /bridgeMessageManager: null/);
+  assert.match(source, /previousMessageManager !== messageManager/);
 
   const paneStart = source.indexOf("createReaderAlphaXivPane");
   const paneEnd = source.indexOf("  applyReaderReadingSurfaceMode(", paneStart);
@@ -415,12 +509,16 @@ function verifyPanelContract() {
   assert.doesNotMatch(paneSource, /"翻译"/);
   assert.match(paneSource, /zai-reader-alphaxiv-mode-label/);
   assert.match(paneSource, /zai-reader-alphaxiv-ai-button/);
-  assert.match(source, /stable-header-1/);
+  assert.match(source, /stable-header-5/);
   assert.match(paneSource, /data-zai-reliable-control/);
   assert.match(paneSource, /lastPointerActivation/);
+  assert.match(paneSource, /_zaiReliableActivate/);
+  assert.match(paneSource, /data-zai-toggle-pending/);
   assert.match(paneSource, /data-zai-selection-action/);
   assert.match(paneSource, /围绕选区提问/);
-  assert.match(paneSource, /makeSegment\("en", "English", "language"/);
+  assert.match(paneSource, /makeNativeSegment\("en", "English", "language"/);
+  assert.match(paneSource, /makeXUL\("toolbarbutton"/);
+  assert.match(paneSource, /addEventListener\("command"/);
   assert.doesNotMatch(paneSource, /makeSegment\("paper"/);
 
   const selectionStart = source.indexOf("async handleReaderAlphaXivSelection");
@@ -436,6 +534,7 @@ function verifyPanelContract() {
   assert.match(frameScript, /selectionAction\.hidden = true/);
   assert.match(frameScript, /Ask the assistant/);
   assert.match(frameScript, /hideNativeAssistantLauncher/);
+  assert.match(frameScript, /const frameHeaderEnabled = false/);
 
   const questionStyle = source.slice(source.indexOf('".zai-reader-alphaxiv-question-popover{'));
   assert.doesNotMatch(questionStyle, /question-popover\{[^}]*top:12px;right:12px/);
@@ -450,6 +549,13 @@ function verifyPanelContract() {
   assert.match(source, /data-zai-reader-toolbar-overlay/);
   assert.match(source, /data-zai-toolbar-overlay-suspended/);
   assert.match(source, /syncReaderToolbarButtonOverlays/);
+  assert.match(source, /routeReaderAlphaXivHeaderEvent\(reader, event\)/);
+  assert.match(source, /data\.kind === "header-action"/);
+  assert.match(source, /data-zai-frame-toolbar/);
+  assert.match(source, /readerChatTogglePromises/);
+  assert.match(source, /async waitForReaderInit\(reader, timeoutMs = 250\)/);
+  assert.match(source, /Promise\.race\(\[/);
+  assert.match(source, /stable-header-5/);
   assert.match(source, /\.zai-reader-alphaxiv-pane\[data-zai-central-reading-surface='true'\]\{display:flex!important/);
   assert.match(source, /\.zai-reader-alphaxiv-header\{display:flex!important;position:relative!important/);
   assert.match(source, /\.zai-reader-alphaxiv-identity\{display:flex;position:relative;z-index:61/);
@@ -475,6 +581,11 @@ function verifyPanelContract() {
   const refreshEnd = source.indexOf("\n  renderReaderAlphaXivPane(state) {", refreshStart);
   const refreshSource = source.slice(refreshStart, refreshEnd);
   assert.match(refreshSource, /getAlphaXivURL\(state\.arxivID, state\.language\)/);
+  assert.ok(
+    refreshSource.indexOf("this.installReaderAlphaXivBridge(state)") <
+      refreshSource.indexOf("this.loadReaderWebView(state.webView, url"),
+    "the delayed selection bridge must be registered before alphaXiv navigation"
+  );
   assert.doesNotMatch(source, /alphaxiv\.org\/pdf\//);
   assert.ok(
     source.indexOf("this.loadReaderWebView(state.webView, url", refreshStart) <
@@ -489,6 +600,7 @@ verifySelectionContext();
 verifyReadingSurfaceSwitch();
 verifyToolbarBridgeIsolation();
 verifyToolbarOverlaySuspension();
+verifyRetargetedAlphaXivHeaderRouting();
 verifyAlphaXivBoundsClamping();
 verifyExistingPaneAdoptionAndBlankDetection();
 verifyPanelContract();

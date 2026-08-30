@@ -13,6 +13,7 @@ var ZoteroAIReading = {
   readerOfficialSelectionTexts: new Map(),
   readerTranslationStates: new Map(),
   readerChatStates: new Map(),
+  readerChatTogglePromises: new Map(),
   readerAlphaXivStates: new Map(),
   alphaXivAvailability: new Map(),
   conversationIndex: new Map(),
@@ -29,7 +30,7 @@ var ZoteroAIReading = {
   READER_BUTTON_ID: "zotero-ai-reading-reader-button",
   READER_TRANSLATION_BUTTON_ID: "zotero-ai-reading-translation-button",
   READER_ALPHAXIV_BUTTON_ID: "zotero-ai-reading-alphaxiv-button",
-  READER_ALPHAXIV_UI_VERSION: "stable-header-1",
+  READER_ALPHAXIV_UI_VERSION: "stable-header-5",
   CHAT_NOTE_MARKER: "ZAI_CHAT_V1:",
   CHAT_NOTE_VERSION: 3,
   _readerConversationCounter: 0,
@@ -864,6 +865,7 @@ var ZoteroAIReading = {
         catch (_) {}
       }
       this.readerChatStates.clear();
+      this.readerChatTogglePromises.clear();
       this.readerTranslationStates.clear();
       this.readerAlphaXivStates.clear();
       this.alphaXivAvailability.clear();
@@ -955,10 +957,7 @@ var ZoteroAIReading = {
       if (!reader || reader.type !== "pdf") {
         return;
       }
-      try {
-        await reader._initPromise;
-      }
-      catch (_) {}
+      await this.waitForReaderInit(reader);
 
       let doc = reader._iframeWindow?.document;
       if (!doc) {
@@ -1119,6 +1118,129 @@ var ZoteroAIReading = {
     );
   },
 
+  async waitForReaderInit(reader, timeoutMs = 250) {
+    // Zotero can leave _initPromise pending while a remote PDF/browser is
+    // being restored. The reader DOM is already usable in that state, so a
+    // panel toggle must not wait forever for an internal promise. Give normal
+    // initialization a short chance to finish, then continue with the DOM we
+    // have and let the reader settle in the background.
+    let init = reader?._initPromise;
+    if (!init || typeof init.then !== "function") {
+      return true;
+    }
+    let timer = null;
+    let win = reader?._window;
+    let timeout = new Promise((resolve) => {
+      try {
+        if (typeof win?.setTimeout === "function") {
+          timer = win.setTimeout(resolve, Math.max(0, Number(timeoutMs) || 0));
+          return;
+        }
+      }
+      catch (_) {}
+      try {
+        timer = setTimeout(resolve, Math.max(0, Number(timeoutMs) || 0));
+      }
+      catch (_) {
+        resolve();
+      }
+    });
+    try {
+      await Promise.race([
+        Promise.resolve(init).catch(() => null),
+        timeout
+      ]);
+    }
+    catch (_) {}
+    finally {
+      try {
+        if (timer != null && typeof win?.clearTimeout === "function") {
+          win.clearTimeout(timer);
+        }
+        else if (timer != null && typeof clearTimeout === "function") {
+          clearTimeout(timer);
+        }
+      }
+      catch (_) {}
+    }
+    return true;
+  },
+
+  getReaderAlphaXivHeaderControlAtPoint(reader, event) {
+    try {
+      let state = this.readerAlphaXivStates.get(reader);
+      let pane = state?.pane;
+      let x = Number(event?.clientX);
+      let y = Number(event?.clientY);
+      // Once the remote page owns its toolbar, never reinterpret a retargeted
+      // browser event against the hidden parent controls. Doing so can make a
+      // single press dispatch both the frame action and the legacy fallback.
+      if (!pane || state?.frameToolbarReady || !this.isReaderAlphaXivSurfaceActive(reader) ||
+          !Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      let buttons = Array.from(pane.querySelectorAll?.(
+        "[data-zai-reliable-control='true']"
+      ) || []);
+      for (let button of buttons) {
+        if (button.hidden || button.disabled) {
+          continue;
+        }
+        let rect = button.getBoundingClientRect?.();
+        if (rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          return button;
+        }
+      }
+    }
+    catch (_) {}
+    return null;
+  },
+
+  routeReaderAlphaXivHeaderEvent(reader, event) {
+    if (!event || !["pointerdown", "mousedown", "click"].includes(event.type)) {
+      return false;
+    }
+    let button = this.getReaderAlphaXivHeaderControlAtPoint(reader, event);
+    if (!button) {
+      return false;
+    }
+    // When the event really reached the HTML control, its own listener owns
+    // the gesture. This bridge is only for Gecko's retargeted outer-document
+    // events whose target is the embedded remote browser.
+    try {
+      let path = Array.from(event.composedPath?.() || []);
+      if (path.includes(button) || path.some((node) => {
+        try {
+          return node === button || button.contains?.(node);
+        }
+        catch (_) {
+          return false;
+        }
+      })) {
+        return false;
+      }
+    }
+    catch (_) {}
+
+    let now = Date.now();
+    let last = Number(button._zaiReliableLastActivationAt || 0);
+    let elapsed = Number.isFinite(last) ? now - last : Infinity;
+    let duplicateWindow = event.type === "pointerdown" ? 120 : 800;
+    event.preventDefault?.();
+    event.stopImmediatePropagation?.();
+    event.stopPropagation?.();
+    if (elapsed < duplicateWindow) {
+      return true;
+    }
+    if (typeof button._zaiReliableActivate === "function") {
+      button._zaiReliableActivate(event);
+    }
+    else {
+      button.click?.();
+    }
+    return true;
+  },
+
   isReaderAuxiliaryPanelEvent(event, reader = null) {
     // The toolbar bridge listens on the PDF iframe's owner document. That
     // document also contains our side panes, so a click in a pane must not be
@@ -1225,6 +1347,7 @@ var ZoteroAIReading = {
           // surface, not just the similarly placed "简读" button, so no
           // retargeted header control can be mistaken for AI or translation.
           if (this.isReaderAlphaXivSurfaceActive(reader)) {
+            this.routeReaderAlphaXivHeaderEvent(reader, event);
             return;
           }
           if (this.isReaderAuxiliaryPanelEvent(event, reader)) {
@@ -1366,8 +1489,11 @@ var ZoteroAIReading = {
             if (!this.isLeftActivationEvent(event)) {
               return;
             }
-            if (this.isReaderAlphaXivSurfaceActive(reader) ||
-                this.isReaderAuxiliaryPanelEvent(event, reader)) {
+            if (this.isReaderAlphaXivSurfaceActive(reader)) {
+              this.routeReaderAlphaXivHeaderEvent(reader, event);
+              return;
+            }
+            if (this.isReaderAuxiliaryPanelEvent(event, reader)) {
               // The overlay is inert while the brief is visible. Leave the
               // event uncancelled so a retargeted HTML control can handle it.
               return;
@@ -2819,15 +2945,32 @@ var ZoteroAIReading = {
     return "";
   },
 
-  async toggleReaderChatPane(reader, options = {}) {
-    if (this.isReaderChatPaneOpen(reader)) {
-      this.closeReaderAIPane(reader);
-      this.updateReaderToolbarButtonState(reader);
-      return null;
+  toggleReaderChatPane(reader, options = {}) {
+    let pending = this.readerChatTogglePromises.get(reader);
+    if (pending) {
+      // A brief header can receive both a retargeted outer-document event and
+      // the native button event. Share the in-flight operation so one press
+      // cannot start two competing pane creations.
+      return pending;
     }
-    let state = await this.openNativeReaderChatPane(reader, options);
-    this.updateReaderToolbarButtonState(reader);
-    return state;
+    let action = (async () => {
+      if (this.isReaderChatPaneOpen(reader)) {
+        this.closeReaderAIPane(reader);
+        this.updateReaderToolbarButtonState(reader);
+        return null;
+      }
+      let state = await this.openNativeReaderChatPane(reader, options);
+      this.updateReaderToolbarButtonState(reader);
+      return state;
+    })();
+    this.readerChatTogglePromises.set(reader, action);
+    let clear = () => {
+      if (this.readerChatTogglePromises.get(reader) === action) {
+        this.readerChatTogglePromises.delete(reader);
+      }
+    };
+    action.then(clear, clear);
+    return action;
   },
 
   async toggleReaderTranslationPane(reader, options = {}) {
@@ -2931,7 +3074,11 @@ var ZoteroAIReading = {
       bridgeMessageListener: null,
       bridgeLoadListener: null,
       bridgeListenerAttached: false,
+      bridgeMessageManager: null,
       bridgeFrameScriptURL: "",
+      bridgeFrameScriptManager: null,
+      frameToolbarReady: false,
+      alphaHeaderActionPromise: null,
       overlayResizeObserver: null,
       sidePanelsBeforeAlpha: null,
       surfaceIntentToken: 0
@@ -3000,10 +3147,7 @@ var ZoteroAIReading = {
     if (!reader || reader.type !== "pdf") {
       throw new Error("请先打开一份 PDF。");
     }
-    try {
-      await reader._initPromise;
-    }
-    catch (_) {}
+    await this.waitForReaderInit(reader);
     let arxivID = this.getReaderArXivID(reader);
     if (!arxivID) {
       throw new Error("当前文献没有可识别的 arXiv 编号。");
@@ -3100,6 +3244,21 @@ var ZoteroAIReading = {
         event?.stopPropagation?.();
       };
       button.setAttribute("data-zai-reliable-control", "true");
+      button._zaiReliableActivate = (event) => {
+        if (button.disabled) {
+          return false;
+        }
+        lastPointerActivation = Date.now();
+        button._zaiReliableLastActivationAt = lastPointerActivation;
+        try {
+          button.focus?.({ preventScroll: true });
+        }
+        catch (_) {
+          button.focus?.();
+        }
+        callback(event);
+        return true;
+      };
       // Run on pointerdown, before opening a side panel or reloading a language
       // can resize the central surface underneath the pointer. The later click
       // remains as the keyboard/accessibility fallback and is de-duplicated.
@@ -3108,21 +3267,14 @@ var ZoteroAIReading = {
           return;
         }
         consume(event);
-        lastPointerActivation = Date.now();
-        try {
-          button.focus?.({ preventScroll: true });
-        }
-        catch (_) {
-          button.focus?.();
-        }
-        callback(event);
+        button._zaiReliableActivate(event);
       }, true);
       button.addEventListener("click", (event) => {
         consume(event);
         if (button.disabled || Date.now() - lastPointerActivation < 800) {
           return;
         }
-        callback(event);
+        button._zaiReliableActivate(event);
       }, true);
       return button;
     };
@@ -3140,12 +3292,47 @@ var ZoteroAIReading = {
       button.setAttribute("data-kind", kind);
       return bindReliableControl(button, callback);
     };
+    let bindNativeControl = (button, callback) => {
+      button.setAttribute("data-zai-reliable-control", "true");
+      button._zaiReliableActivate = (event) => {
+        if (button.disabled || button.getAttribute?.("disabled") === "true") {
+          return false;
+        }
+        button._zaiReliableLastActivationAt = Date.now();
+        callback(event);
+        return true;
+      };
+      for (let type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+        button.addEventListener(type, (event) => event.stopPropagation(), true);
+      }
+      button.addEventListener("command", (event) => {
+        event.stopPropagation?.();
+        button._zaiReliableActivate(event);
+      });
+      return button;
+    };
+    let makeNativeButton = (label, title, callback, className = "") => {
+      let button = makeXUL("toolbarbutton", "zai-reader-chat-icon " + className);
+      button.setAttribute("label", label);
+      button.setAttribute("tooltiptext", title);
+      button.setAttribute("aria-label", title);
+      return bindNativeControl(button, callback);
+    };
+    let makeNativeSegment = (value, label, kind, callback) => {
+      let button = makeXUL("toolbarbutton", "zai-reader-alphaxiv-segment");
+      button.setAttribute("label", label);
+      button.setAttribute("data-value", value);
+      button.setAttribute("data-kind", kind);
+      return bindNativeControl(button, callback);
+    };
 
     let pane = makeXUL("vbox", "zai-reader-ai-pane zai-reader-alphaxiv-pane");
     pane.id = this.getReaderAlphaXivPaneID(reader);
     pane.setAttribute("data-zai-pane-mode", "alphaxiv");
     pane.setAttribute("orient", "vertical");
-    let header = makeHTML("header", "zai-reader-alphaxiv-header");
+    let header = makeXUL("hbox", "zai-reader-alphaxiv-header");
+    header.setAttribute("align", "center");
+    header.setAttribute("orient", "horizontal");
     let identity = makeHTML("div", "zai-reader-alphaxiv-identity");
     identity.appendChild(makeHTML("span", "zai-reader-alphaxiv-badge", "αX"));
     let identityText = makeHTML("div", "zai-reader-alphaxiv-identity-text");
@@ -3154,54 +3341,69 @@ var ZoteroAIReading = {
     identityText.appendChild(status);
     identity.appendChild(identityText);
 
-    let controls = makeHTML("div", "zai-reader-alphaxiv-controls");
+    let controls = makeXUL("hbox", "zai-reader-alphaxiv-controls");
+    controls.setAttribute("align", "center");
+    controls.setAttribute("pack", "end");
     // The native PDF is the only “original” view. Keeping an original-mode
     // button beside the language buttons made a click on English easy to
     // mis-hit and could unexpectedly switch surfaces. The x button below is
     // the single, explicit route back to the local PDF.
-    let modeLabel = makeHTML("span", "zai-reader-alphaxiv-mode-label", "简读");
+    let modeLabel = makeXUL("label", "zai-reader-alphaxiv-mode-label");
+    modeLabel.setAttribute("value", "简读");
     modeLabel.setAttribute("aria-label", "当前为 alphaXiv 简读");
     state.modeButtons = [];
-    let languageGroup = makeHTML("div", "zai-reader-alphaxiv-segments");
+    let languageGroup = makeXUL("hbox", "zai-reader-alphaxiv-segments");
     languageGroup.setAttribute("role", "group");
     languageGroup.setAttribute("aria-label", "alphaXiv 内容语言");
     state.languageButtons = [
-      makeSegment("zh", "中文", "language", () => this.setReaderAlphaXivLanguage(state, "zh")),
-      makeSegment("en", "English", "language", () => this.setReaderAlphaXivLanguage(state, "en"))
+      makeNativeSegment("zh", "中文", "language", () => this.setReaderAlphaXivLanguage(state, "zh")),
+      makeNativeSegment("en", "English", "language", () => this.setReaderAlphaXivLanguage(state, "en"))
     ];
     state.languageButtons.forEach((button) => languageGroup.appendChild(button));
     controls.appendChild(modeLabel);
     controls.appendChild(languageGroup);
-    let aiButton = makeIconButton("AI", "在当前简读旁打开 AI 对话", (event) => {
+    let aiButton = makeNativeButton("AI", "在当前简读旁打开 AI 对话", (event) => {
       // The embedded browser and the native PDF both sit below this header.
       // Consume the gesture here so a click cannot fall through and switch the
       // reading surface back to the local PDF.
       event?.preventDefault?.();
       event?.stopPropagation?.();
-      this.toggleReaderChatPane(state.reader, {
+      aiButton.setAttribute("aria-busy", "true");
+      aiButton.setAttribute("data-zai-toggle-pending", "true");
+      let finish = () => {
+        aiButton.removeAttribute("aria-busy");
+        aiButton.removeAttribute("data-zai-toggle-pending");
+        let current = this.readerAlphaXivStates.get(state.reader) || state;
+        try {
+          this.renderReaderAlphaXivPane(current);
+        }
+        catch (error) {
+          this.log("alphaXiv AI button settle render failed: " + (error.stack || error.message || String(error)));
+        }
+      };
+      Promise.resolve(this.toggleReaderChatPane(state.reader, {
         focusComposer: false,
         preserveAlphaXivSurface: true
-      }).then(() => {
+      })).then(() => {
         let current = this.readerAlphaXivStates.get(state.reader) || state;
         if (current?.pane?.isConnected && current.mode === "abstract") {
           this.preserveReaderAlphaXivSurface(state.reader, "abstract");
         }
-        this.renderReaderAlphaXivPane(current);
-      }).catch((error) => {
+      }, (error) => {
         state.statusMessage = error?.message || "无法打开 AI 对话";
         this.renderReaderAlphaXivPane(state);
-      });
+      }).then(finish, finish);
     });
     state.alphaChatButton = aiButton;
     aiButton.classList.add("zai-reader-alphaxiv-ai-button");
     controls.appendChild(aiButton);
-    controls.appendChild(makeIconButton("↻", "刷新在线内容", () =>
+    controls.appendChild(makeNativeButton("↻", "刷新在线内容", () =>
       this.refreshReaderAlphaXivPane(state, { force: true, reload: true })
     ));
-    controls.appendChild(makeIconButton("↗", "在浏览器中打开 alphaXiv", () =>
+    controls.appendChild(makeNativeButton("↗", "在浏览器中打开 alphaXiv", () =>
       Zotero.launchURL(this.getAlphaXivURL(state.arxivID, state.language))
     ));
-    controls.appendChild(makeIconButton("×", "返回本地 PDF", () =>
+    controls.appendChild(makeNativeButton("×", "返回本地 PDF", () =>
       this.returnReaderToLocalPaper(state)
     ));
     header.appendChild(identity);
@@ -3242,6 +3444,7 @@ var ZoteroAIReading = {
 
     state.pane = pane;
     state.webView = webView;
+    state.frameToolbarReady = pane.hasAttribute?.("data-zai-frame-toolbar") || false;
     state.statusNode = status;
     state.emptyNode = empty;
     state.selectionBar = null;
@@ -3674,6 +3877,11 @@ var ZoteroAIReading = {
     };
     this.renderReaderAlphaXivPane(state);
     let url = this.getAlphaXivURL(state.arxivID, state.language);
+    // Register the delayed frame script before navigation. alphaXiv can swap
+    // the remote browser's content process while changing locale; registering
+    // first lets Gecko install the bridge in the replacement document as soon
+    // as that document is created.
+    this.installReaderAlphaXivBridge(state);
     this.loadReaderWebView(state.webView, url, { forceReload: Boolean(options.reload) });
     this.scheduleReaderAlphaXivBridge(state);
 
@@ -3783,6 +3991,7 @@ var ZoteroAIReading = {
     if (state.selectionQuestionPopover && state.selectionQuestionOpen && state.selectionContext?.selectedText) {
       this.updateAlphaXivQuestionPopover(state);
     }
+    this.syncReaderAlphaXivFrameHeader(state);
   },
 
   closeReaderAlphaXivPane(reader, options = {}) {
@@ -3961,6 +4170,11 @@ var ZoteroAIReading = {
       else if (data.kind === "page-status") {
         this.handleReaderAlphaXivPageStatus(state, data);
       }
+      else if (data.kind === "header-action") {
+        this.handleReaderAlphaXivHeaderAction(state, data).catch((error) =>
+          this.log("alphaXiv header action failed: " + (error.stack || error.message || String(error)))
+        );
+      }
     };
     let loadListener = () => {
       // A remote <browser> can replace its message manager when remoteness
@@ -3989,15 +4203,22 @@ var ZoteroAIReading = {
       return;
     }
     try {
-      let messageManager = state.webView?.messageManager || state.webView?.frameLoader?.messageManager;
-      if (state.bridgeMessageName && state.bridgeMessageListener) {
-        messageManager?.removeMessageListener?.(state.bridgeMessageName, state.bridgeMessageListener);
+      let currentMessageManager = state.webView?.messageManager || state.webView?.frameLoader?.messageManager;
+      let messageManagers = new Set([
+        state.bridgeMessageManager,
+        state.bridgeFrameScriptManager,
+        currentMessageManager
+      ].filter(Boolean));
+      for (let messageManager of messageManagers) {
+        if (state.bridgeMessageName && state.bridgeMessageListener) {
+          messageManager?.removeMessageListener?.(state.bridgeMessageName, state.bridgeMessageListener);
+        }
+        if (state.bridgeFrameScriptURL) {
+          messageManager?.removeDelayedFrameScript?.(state.bridgeFrameScriptURL);
+        }
       }
       if (state.bridgeLoadListener) {
         state.webView?.removeEventListener?.("load", state.bridgeLoadListener, true);
-      }
-      if (state.bridgeFrameScriptURL) {
-        messageManager?.removeDelayedFrameScript?.(state.bridgeFrameScriptURL);
       }
     }
     catch (_) {}
@@ -4005,7 +4226,11 @@ var ZoteroAIReading = {
     state.bridgeMessageListener = null;
     state.bridgeLoadListener = null;
     state.bridgeListenerAttached = false;
+    state.bridgeMessageManager = null;
     state.bridgeFrameScriptURL = "";
+    state.bridgeFrameScriptManager = null;
+    state.frameToolbarReady = false;
+    state.alphaHeaderActionPromise = null;
   },
 
   sendReaderAlphaXivFrameCommand(state, data) {
@@ -4032,11 +4257,27 @@ var ZoteroAIReading = {
       if (!messageManager?.addMessageListener) {
         return false;
       }
+      let previousMessageManager = state.bridgeMessageManager;
+      if (previousMessageManager && previousMessageManager !== messageManager) {
+        try {
+          previousMessageManager.removeMessageListener?.(
+            state.bridgeMessageName,
+            state.bridgeMessageListener
+          );
+          if (state.bridgeFrameScriptURL && state.bridgeFrameScriptManager === previousMessageManager) {
+            previousMessageManager.removeDelayedFrameScript?.(state.bridgeFrameScriptURL);
+          }
+        }
+        catch (_) {}
+        state.bridgeFrameScriptURL = "";
+        state.bridgeFrameScriptManager = null;
+      }
       try {
         messageManager.removeMessageListener?.(state.bridgeMessageName, state.bridgeMessageListener);
       }
       catch (_) {}
       messageManager.addMessageListener(state.bridgeMessageName, state.bridgeMessageListener);
+      state.bridgeMessageManager = messageManager;
       state.bridgeListenerAttached = true;
       return true;
     }
@@ -4068,11 +4309,12 @@ var ZoteroAIReading = {
       this.bindReaderAlphaXivMessageListener(state);
       let scriptURL = "data:application/javascript;charset=utf-8," +
         encodeURIComponent(this.getReaderAlphaXivFrameScript(state.bridgeMessageName));
-      if (state.bridgeFrameScriptURL !== scriptURL) {
-        if (state.bridgeFrameScriptURL) {
-          messageManager.removeDelayedFrameScript?.(state.bridgeFrameScriptURL);
+      if (state.bridgeFrameScriptURL !== scriptURL || state.bridgeFrameScriptManager !== messageManager) {
+        if (state.bridgeFrameScriptURL && state.bridgeFrameScriptManager) {
+          state.bridgeFrameScriptManager.removeDelayedFrameScript?.(state.bridgeFrameScriptURL);
         }
         state.bridgeFrameScriptURL = scriptURL;
+        state.bridgeFrameScriptManager = messageManager;
         messageManager.loadFrameScript(scriptURL, true);
       }
       else {
@@ -4090,12 +4332,13 @@ var ZoteroAIReading = {
     return `
 (function() {
   const messageName = ${JSON.stringify(messageName)};
-      const bridgeVersion = messageName + ":v5";
+      const bridgeVersion = messageName + ":v9";
   const win = content;
   const doc = win && win.document;
   if (!doc || !/^(?:www\\.)?alphaxiv\\.org$/i.test(String(win.location && win.location.hostname || ""))) {
     return;
   }
+  const frameHeaderEnabled = false;
 
   function clean(value) {
     return String(value || "")
@@ -4116,6 +4359,9 @@ var ZoteroAIReading = {
     }
     style.textContent = [
       "nav[aria-label='Main'],[data-navigation-sidebar],#popout-assistant-panel,button[aria-label='Ask the assistant'],button[aria-label='Close assistant'],[data-quote-selection],button[aria-label='Notes'],aside[aria-label='Paper info'],#credential_picker_container,iframe[src*='accounts.google.com/gsi/']{display:none!important;visibility:hidden!important;pointer-events:none!important}",
+      "#zai-alpha-reader-toolbar{display:flex!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;position:fixed!important;z-index:2147483647!important}",
+      "#zai-alpha-reader-toolbar button[data-active]{background:#147a6c!important;border-color:#147a6c!important;color:#fff!important}",
+      "#zai-alpha-reader-toolbar[data-pending='true']{opacity:.88!important}",
       "html,body{max-width:100%!important;overflow-x:hidden!important}",
       "main{width:100%!important;min-width:0!important;padding-left:0!important;padding-right:0!important}",
       "main>div{max-width:100%!important}",
@@ -4128,16 +4374,28 @@ var ZoteroAIReading = {
 
   function hideOnlineViewSwitcher() {
     try {
-      let links = Array.from(doc.querySelectorAll("a")).filter((node) =>
-        /^(?:Abstract|Paper)$/i.test(clean(node.innerText || node.textContent)) &&
-        /^\\/(?:abs|pdf)\\//.test(String(node.getAttribute("href") || ""))
+      let labels = /^(?:Abstract|Paper|摘要|论文)$/i;
+      let candidates = Array.from(doc.querySelectorAll("a,button,[role='tab']")).filter((node) =>
+        !node.closest?.("#zai-alpha-reader-toolbar") &&
+        labels.test(clean(node.innerText || node.textContent))
       );
-      for (let link of links) {
-        let group = link.parentElement;
-        let siblings = links.filter((candidate) => candidate.parentElement === group);
-        if (group && siblings.length >= 2) {
-          group.style.setProperty("display", "none", "important");
+      let groups = new Set();
+      for (let node of candidates) {
+        let group = node.closest?.("[role='tablist'],[class*='segmented'],[class*='toggle']") || node.parentElement;
+        if (!group) {
+          continue;
         }
+        let siblings = Array.from(group.querySelectorAll?.("a,button,[role='tab']") || [])
+          .filter((candidate) => !candidate.closest?.("#zai-alpha-reader-toolbar") &&
+            labels.test(clean(candidate.innerText || candidate.textContent)));
+        if (siblings.length >= 2) {
+          groups.add(group);
+        }
+      }
+      for (let group of groups) {
+        group.style.setProperty("display", "none", "important");
+        group.style.setProperty("visibility", "hidden", "important");
+        group.style.setProperty("pointer-events", "none", "important");
       }
     }
     catch (_) {}
@@ -4160,8 +4418,221 @@ var ZoteroAIReading = {
     catch (_) {}
   }
 
+  // The parent Zotero document contains a native remote <browser>. Ordinary
+  // XUL/HTML siblings can remain visible in the DOM while being painted below
+  // that browser compositor layer, which made the old brief header appear
+  // intermittently unclickable. Keep the actionable header inside this page.
+  let headerToolbar = null;
+  let headerRoot = null;
+  let headerModeLabel = null;
+  let headerButtons = Object.create(null);
+  let headerState = { mode: "abstract", language: "zh", chatOpen: false, pending: "" };
+  let headerPendingTimer = null;
+
+  function isHeaderToolbarEvent(event) {
+    if (!headerToolbar || !event) {
+      return false;
+    }
+    try {
+      let path = event.composedPath && event.composedPath();
+      if (Array.isArray(path) && path.includes(headerToolbar)) {
+        return true;
+      }
+    }
+    catch (_) {}
+    try {
+      let target = event.target;
+      return target === headerToolbar || Boolean(headerToolbar.contains?.(target));
+    }
+    catch (_) {
+      return false;
+    }
+  }
+
+  function updateHeaderToolbar(data = {}) {
+    if (data.mode === "paper" || data.mode === "abstract") {
+      headerState.mode = data.mode;
+    }
+    if (data.language === "en" || data.language === "zh") {
+      headerState.language = data.language;
+    }
+    if (typeof data.chatOpen === "boolean") {
+      headerState.chatOpen = data.chatOpen;
+    }
+    if (data.pending !== undefined) {
+      headerState.pending = String(data.pending || "");
+    }
+    if (!headerToolbar) {
+      return;
+    }
+    if (headerModeLabel) {
+      headerModeLabel.textContent = headerState.mode === "paper" ? "原文" : "简读";
+    }
+    for (let action of ["language-zh", "language-en"]) {
+      let button = headerButtons[action];
+      if (!button) {
+        continue;
+      }
+      let active = (action === "language-en" ? "en" : "zh") === headerState.language;
+      button.toggleAttribute("data-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    }
+    let ai = headerButtons["chat-toggle"];
+    if (ai) {
+      ai.toggleAttribute("data-active", headerState.chatOpen);
+      ai.setAttribute("aria-pressed", String(headerState.chatOpen));
+      ai.setAttribute("aria-busy", headerState.pending === "chat-toggle" ? "true" : "false");
+      ai.textContent = headerState.chatOpen ? "AI ✓" : "AI";
+      ai.setAttribute("aria-label", headerState.chatOpen ? "关闭 AI 对话" : "打开 AI 对话");
+      ai.title = headerState.chatOpen ? "关闭 AI 对话" : "打开 AI 对话";
+    }
+    headerToolbar.toggleAttribute("data-pending", Boolean(headerState.pending));
+    headerToolbar.setAttribute("data-zai-header-state", headerState.mode + ":" + headerState.language);
+  }
+
+  function sendHeaderAction(action, event) {
+    if (!action || headerState.pending) {
+      return;
+    }
+    headerState.pending = action;
+    updateHeaderToolbar();
+    if (headerPendingTimer) {
+      try { win.clearTimeout(headerPendingTimer); } catch (_) {}
+    }
+    headerPendingTimer = win.setTimeout(() => {
+      headerPendingTimer = null;
+      if (headerState.pending === action) {
+        headerState.pending = "";
+        updateHeaderToolbar();
+      }
+    }, 10000);
+    try {
+      sendAsyncMessage(messageName, { kind: "header-action", action });
+    }
+    catch (_) {
+      headerState.pending = "";
+      updateHeaderToolbar();
+    }
+  }
+
+  function ensureHeaderToolbar() {
+    try {
+      if (!frameHeaderEnabled) {
+        return null;
+      }
+      // Attach to the painted body tree. A fixed node directly under <html>
+      // can report a valid Gecko layout rectangle while WebRender omits it
+      // from this remote browser's composited surface.
+      let parent = doc.body || doc.documentElement;
+      if (!parent) {
+        return null;
+      }
+      let existing = doc.getElementById("zai-alpha-reader-toolbar");
+      if (existing && existing.getAttribute("data-zai-bridge-version") !== bridgeVersion) {
+        existing.remove();
+        existing = null;
+      }
+      if (existing) {
+        headerToolbar = existing;
+        headerRoot = existing.shadowRoot || existing;
+        headerModeLabel = headerRoot.querySelector("[data-zai-header-mode]");
+        headerButtons = Object.create(null);
+        for (let button of headerRoot.querySelectorAll("button[data-zai-header-action]")) {
+          headerButtons[button.getAttribute("data-zai-header-action")] = button;
+        }
+        updateHeaderToolbar();
+        return existing;
+      }
+      headerToolbar = doc.createElement("div");
+      headerToolbar.id = "zai-alpha-reader-toolbar";
+      headerToolbar.setAttribute("data-zai-bridge-version", bridgeVersion);
+      headerToolbar.setAttribute("role", "toolbar");
+      headerToolbar.setAttribute("aria-label", "Zotero 简读控制");
+      headerRoot = headerToolbar.attachShadow
+        ? headerToolbar.attachShadow({ mode: "open" })
+        : headerToolbar;
+      headerToolbar.style.cssText = [
+        "position:fixed",
+        "top:10px",
+        "right:14px",
+        "z-index:2147483647",
+        "display:flex",
+        "align-items:center",
+        "gap:4px",
+        "padding:4px",
+        "border:1px solid rgba(125,137,145,.42)",
+        "border-radius:6px",
+        "background:rgba(255,255,255,.97)",
+        "box-shadow:0 3px 14px rgba(20,30,36,.22)",
+        "color:#26322f",
+        "font:12px -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif",
+        "pointer-events:auto",
+        "user-select:none",
+        "-moz-user-select:none",
+        "direction:ltr"
+      ].join(";");
+      let toolbarStyle = doc.createElement("style");
+      toolbarStyle.textContent = [
+        ":host{all:initial;display:flex!important;position:fixed!important;top:10px!important;right:14px!important;z-index:2147483647!important;align-items:center!important;gap:4px!important;box-sizing:border-box!important;padding:4px!important;border:1px solid rgba(125,137,145,.42)!important;border-radius:6px!important;background:rgba(255,255,255,.97)!important;box-shadow:0 3px 14px rgba(20,30,36,.22)!important;color:#26322f!important;pointer-events:auto!important;user-select:none!important;-moz-user-select:none!important;direction:ltr!important}",
+        "*{box-sizing:border-box}",
+        "button{appearance:none!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;min-width:30px!important;height:28px!important;margin:0!important;padding:0 7px!important;border:1px solid rgba(125,137,145,.34)!important;border-radius:4px!important;background:#fff!important;color:#34423e!important;font:700 11px -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif!important;line-height:1!important;text-align:center!important;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation!important;white-space:nowrap!important}",
+        "button:hover{background:#f2f5f4!important;border-color:rgba(82,96,92,.58)!important}",
+        "button[data-active]{background:#147a6c!important;border-color:#147a6c!important;color:#fff!important}",
+        "[data-zai-header-mode]{display:inline-flex!important;align-items:center!important;height:28px!important;padding:0 6px!important;border-radius:4px!important;background:#f2f5f4!important;color:#52605c!important;font:700 11px -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif!important;white-space:nowrap!important}"
+      ].join("\\n");
+      headerRoot.appendChild(toolbarStyle);
+      let mode = doc.createElement("span");
+      mode.setAttribute("data-zai-header-mode", "true");
+      mode.style.cssText = "display:inline-flex;align-items:center;height:28px;padding:0 6px;border-radius:4px;background:#f2f5f4;color:#52605c;font-size:11px;font-weight:700;white-space:nowrap;";
+      headerModeLabel = mode;
+      headerRoot.appendChild(mode);
+      let definitions = [
+        ["language-zh", "中", "切换到中文简读"],
+        ["language-en", "EN", "切换到英文简读"],
+        ["chat-toggle", "AI", "打开或关闭 AI 对话"],
+        ["refresh", "↻", "刷新在线简读"],
+        ["external", "↗", "在浏览器中打开 alphaXiv"],
+        ["paper", "×", "返回本地 PDF"]
+      ];
+      headerButtons = Object.create(null);
+      for (let definition of definitions) {
+        let action = definition[0];
+        let button = doc.createElement("button");
+        button.type = "button";
+        button.textContent = definition[1];
+        button.setAttribute("data-zai-header-action", action);
+        button.setAttribute("aria-label", definition[2]);
+        button.title = definition[2];
+        button.style.cssText = "box-sizing:border-box;min-width:30px;height:28px;padding:0 7px;border:1px solid rgba(125,137,145,.34);border-radius:4px;background:#fff;color:#34423e;font:700 11px -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;line-height:26px;text-align:center;cursor:pointer;pointer-events:auto;touch-action:manipulation;";
+        button.addEventListener("pointerdown", (event) => {
+          event.stopPropagation();
+        }, true);
+        button.addEventListener("mousedown", (event) => {
+          event.stopPropagation();
+        }, true);
+        button.addEventListener("pointerup", (event) => {
+          event.stopPropagation();
+        }, true);
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          event.stopPropagation();
+          sendHeaderAction(action, event);
+        }, true);
+        headerButtons[action] = button;
+        headerRoot.appendChild(button);
+      }
+      parent.appendChild(headerToolbar);
+      updateHeaderToolbar();
+      return headerToolbar;
+    }
+    catch (_) {
+      return null;
+    }
+  }
+
   function stopNativeAssistantInteraction(event) {
-    if (!event || isSelectionUIEvent(event)) {
+    if (!event || isSelectionUIEvent(event) || isHeaderToolbarEvent(event)) {
       return;
     }
     try {
@@ -4185,7 +4656,7 @@ var ZoteroAIReading = {
 
   function isExcluded(element) {
     return Boolean(element && element.closest && element.closest(
-      "nav,aside,#popout-assistant-panel,[role='dialog'],[aria-label='Notes']"
+      "nav,aside,#popout-assistant-panel,#zai-alpha-reader-toolbar,[role='dialog'],[aria-label='Notes']"
     ));
   }
 
@@ -4670,6 +5141,40 @@ var ZoteroAIReading = {
       let overview = doc.querySelector("#overview");
       let article = doc.querySelector("main article") || doc.querySelector("article") || doc.querySelector("main");
       let contentTextLength = clean(article && (article.innerText || article.textContent)).length;
+      let toolbarRect = null;
+      let toolbarStyle = null;
+      try {
+        let rect = headerToolbar?.getBoundingClientRect?.();
+        let style = headerToolbar && win.getComputedStyle?.(headerToolbar);
+        if (rect) {
+          toolbarRect = {
+            left: Number(rect.left || 0),
+            top: Number(rect.top || 0),
+            right: Number(rect.right || 0),
+            bottom: Number(rect.bottom || 0),
+            width: Number(rect.width || 0),
+            height: Number(rect.height || 0)
+          };
+        }
+        if (style) {
+          toolbarStyle = {
+            display: String(style.display || ""),
+            visibility: String(style.visibility || ""),
+            opacity: String(style.opacity || ""),
+            pointerEvents: String(style.pointerEvents || "")
+          };
+        }
+      }
+      catch (_) {}
+      let toolbarReady = Boolean(
+        headerToolbar?.isConnected &&
+        toolbarRect?.width >= 80 && toolbarRect?.height >= 24 &&
+        toolbarRect.right > 0 && toolbarRect.bottom > 0 &&
+        toolbarRect.left < Number(win.innerWidth || 0) &&
+        toolbarRect.top < Number(win.innerHeight || 0) &&
+        toolbarStyle?.display !== "none" && toolbarStyle?.visibility !== "hidden" &&
+        toolbarStyle?.opacity !== "0" && toolbarStyle?.pointerEvents !== "none"
+      );
       sendAsyncMessage(messageName, {
         kind: "page-status",
         settled: Boolean(settled),
@@ -4678,7 +5183,10 @@ var ZoteroAIReading = {
         contentFound: contentTextLength > 200,
         contentTextLength,
         imageCount: Number((overview || article)?.querySelectorAll?.("img")?.length || 0),
-        formulaCount: Number((overview || article)?.querySelectorAll?.(".katex,.katex-display,math")?.length || 0)
+        formulaCount: Number((overview || article)?.querySelectorAll?.(".katex,.katex-display,math")?.length || 0),
+        toolbarReady,
+        toolbarRect,
+        toolbarStyle
       });
     }
     catch (_) {}
@@ -4687,17 +5195,21 @@ var ZoteroAIReading = {
   installStyle();
   hideOnlineViewSwitcher();
   hideNativeAssistantLauncher();
+  ensureHeaderToolbar();
   reportPageStatus(false);
-  win.setTimeout(() => { hideOnlineViewSwitcher(); hideNativeAssistantLauncher(); reportPageStatus(false); }, 450);
-  win.setTimeout(() => { hideOnlineViewSwitcher(); hideNativeAssistantLauncher(); reportPageStatus(false); }, 1600);
-  win.setTimeout(() => { hideOnlineViewSwitcher(); hideNativeAssistantLauncher(); reportPageStatus(true); }, 3500);
+  win.setTimeout(() => { hideOnlineViewSwitcher(); hideNativeAssistantLauncher(); ensureHeaderToolbar(); reportPageStatus(false); }, 450);
+  win.setTimeout(() => { hideOnlineViewSwitcher(); hideNativeAssistantLauncher(); ensureHeaderToolbar(); reportPageStatus(false); }, 1600);
+  win.setTimeout(() => { hideOnlineViewSwitcher(); hideNativeAssistantLauncher(); ensureHeaderToolbar(); reportPageStatus(true); }, 3500);
   if (win.__zaiAlphaXivSelectionBridge === bridgeVersion) {
     return;
   }
   win.__zaiAlphaXivSelectionBridge = bridgeVersion;
   try {
     win.__zaiAlphaXivAssistantObserver?.disconnect?.();
-    let assistantObserver = new win.MutationObserver(() => hideNativeAssistantLauncher());
+    let assistantObserver = new win.MutationObserver(() => {
+      hideNativeAssistantLauncher();
+      ensureHeaderToolbar();
+    });
     assistantObserver.observe(doc.documentElement || doc, { childList: true, subtree: true });
     win.__zaiAlphaXivAssistantObserver = assistantObserver;
   }
@@ -4705,6 +5217,10 @@ var ZoteroAIReading = {
   let commandListener = (message) => {
     if (message?.data?.kind === "clear-selection-ui") {
       hideSelectionOverlay(true);
+    }
+    else if (message?.data?.kind === "sync-header") {
+      ensureHeaderToolbar();
+      updateHeaderToolbar(message.data);
     }
   };
   try {
@@ -4745,7 +5261,7 @@ var ZoteroAIReading = {
     }
   };
   let clearPendingSelection = (event) => {
-    if (isSelectionUIEvent(event)) {
+    if (isSelectionUIEvent(event) || isHeaderToolbarEvent(event)) {
       return;
     }
     pendingSelection = null;
@@ -4753,7 +5269,7 @@ var ZoteroAIReading = {
     hideSelectionOverlay(false);
   };
   let stopSiteSelectionPopup = (event) => {
-    if (isSelectionUIEvent(event)) {
+    if (isSelectionUIEvent(event) || isHeaderToolbarEvent(event)) {
       return;
     }
     try {
@@ -4793,7 +5309,7 @@ var ZoteroAIReading = {
     }
   }, true);
   win.addEventListener("scroll", (event) => {
-    if (isSelectionUIEvent(event)) {
+    if (isSelectionUIEvent(event) || isHeaderToolbarEvent(event)) {
       return;
     }
     // A scroll invalidates the saved range rectangle. Hide the action until a
@@ -4805,6 +5321,75 @@ var ZoteroAIReading = {
 })();`;
   },
 
+  syncReaderAlphaXivFrameHeader(state) {
+    if (!state?.webView || !state.bridgeMessageName) {
+      return false;
+    }
+    return this.sendReaderAlphaXivFrameCommand(state, {
+      kind: "sync-header",
+      mode: state.mode === "paper" ? "paper" : "abstract",
+      language: state.language === "en" ? "en" : "zh",
+      chatOpen: this.isReaderChatPaneOpen(state.reader),
+      pending: String(state.alphaHeaderActionPending || ""),
+      arxivID: String(state.arxivID || "")
+    });
+  },
+
+  async handleReaderAlphaXivHeaderAction(state, data = {}) {
+    if (!state?.pane?.isConnected || state.mode !== "abstract") {
+      return false;
+    }
+    let action = String(data.action || "").trim();
+    if (!["language-zh", "language-en", "chat-toggle", "refresh", "external", "paper"].includes(action)) {
+      return false;
+    }
+    if (state.alphaHeaderActionPromise) {
+      return state.alphaHeaderActionPromise;
+    }
+    let run = (async () => {
+      state.alphaHeaderActionPending = action;
+      this.syncReaderAlphaXivFrameHeader(state);
+      try {
+        if (action === "language-zh") {
+          this.setReaderAlphaXivLanguage(state, "zh");
+        }
+        else if (action === "language-en") {
+          this.setReaderAlphaXivLanguage(state, "en");
+        }
+        else if (action === "chat-toggle") {
+          await this.toggleReaderChatPane(state.reader, {
+            focusComposer: false,
+            preserveAlphaXivSurface: true
+          });
+        }
+        else if (action === "refresh") {
+          await this.refreshReaderAlphaXivPane(state, { force: true, reload: true });
+        }
+        else if (action === "external") {
+          Zotero.launchURL(this.getAlphaXivURL(state.arxivID, state.language));
+        }
+        else if (action === "paper") {
+          this.returnReaderToLocalPaper(state);
+        }
+      }
+      finally {
+        state.alphaHeaderActionPending = "";
+        this.renderReaderAlphaXivPane(state);
+        this.syncReaderAlphaXivFrameHeader(state);
+      }
+    })();
+    state.alphaHeaderActionPromise = run;
+    try {
+      await run;
+      return true;
+    }
+    finally {
+      if (state.alphaHeaderActionPromise === run) {
+        state.alphaHeaderActionPromise = null;
+      }
+    }
+  },
+
   handleReaderAlphaXivPageStatus(state, data) {
     if (!state?.pane || !data) {
       return;
@@ -4812,6 +5397,18 @@ var ZoteroAIReading = {
     let pageURL = String(data.pageURL || "");
     if (!/^https:\/\/(?:www\.)?alphaxiv\.org\//i.test(pageURL)) {
       return;
+    }
+    state.frameToolbarReady = Boolean(data.toolbarReady);
+    state.frameToolbarDebug = {
+      rect: data.toolbarRect || null,
+      style: data.toolbarStyle || null,
+      checkedAt: Date.now()
+    };
+    if (state.frameToolbarReady) {
+      state.pane.setAttribute?.("data-zai-frame-toolbar", "true");
+    }
+    else {
+      state.pane.removeAttribute?.("data-zai-frame-toolbar");
     }
     let overviewAvailable = Boolean(data.overviewFound);
     let paperAvailable = Boolean(data.contentFound || overviewAvailable);
@@ -4839,6 +5436,7 @@ var ZoteroAIReading = {
     );
     this.renderReaderAlphaXivPane(state);
     this.updateReaderToolbarButtonState(state.reader);
+    this.syncReaderAlphaXivFrameHeader(state);
   },
 
   isReaderAlphaXivRemoteBrowser(state) {
@@ -5254,10 +5852,7 @@ var ZoteroAIReading = {
     if (!reader || reader.type !== "pdf") {
       throw new Error("请先打开一份 PDF。");
     }
-    try {
-      await reader._initPromise;
-    }
-    catch (_) {}
+    await this.waitForReaderInit(reader);
 
     let doc = reader._window?.document || reader._iframe?.ownerDocument;
     if (!doc) {
@@ -5452,10 +6047,7 @@ var ZoteroAIReading = {
     if (!reader || reader.type !== "pdf") {
       throw new Error("请先打开一份 PDF。");
     }
-    try {
-      await reader._initPromise;
-    }
-    catch (_) {}
+    await this.waitForReaderInit(reader);
     let doc = reader._window?.document || reader._iframe?.ownerDocument;
     if (!doc) {
       throw new Error("PDF 阅读器尚未准备好。");
@@ -7192,10 +7784,7 @@ var ZoteroAIReading = {
       if (!reader || reader.type !== "pdf") {
         return false;
       }
-      try {
-        await reader._initPromise;
-      }
-      catch (_) {}
+      await this.waitForReaderInit(reader);
       let rw = reader._iframeWindow;
       let doc = reader._window?.document || reader._iframe?.ownerDocument;
       if (!doc || !rw?.document || !/^https?:\/\//i.test(String(aiURL || ""))) {
@@ -9589,14 +10178,14 @@ var ZoteroAIReading = {
         ".zai-reader-alphaxiv-pane[data-zai-central-reading-surface='true']{display:flex!important;position:absolute!important;z-index:10!important;isolation:isolate;contain:layout paint;min-width:0!important;max-width:none!important;min-height:0!important;overflow:hidden!important;background:#f7f9f8;border-left:0;box-shadow:none;}",
         ".zai-reader-alphaxiv-pane[data-zai-central-reading-surface='true'][hidden]{display:none!important;}",
         ".zai-reader-alphaxiv-pane[data-zai-alpha-surface-hidden='true']{visibility:hidden!important;opacity:0!important;pointer-events:none!important;}",
-        ".zai-reader-alphaxiv-header{display:flex!important;position:relative!important;z-index:60!important;box-sizing:border-box;width:100%!important;height:58px!important;min-height:58px!important;max-height:58px!important;flex:0 0 58px!important;align-items:center;justify-content:space-between;gap:8px;padding:7px 8px;border-bottom:1px solid var(--fill-quarternary,rgba(128,128,128,.25));overflow:hidden;background:var(--material-sidepane,#fff);pointer-events:auto!important;}",
+         ".zai-reader-alphaxiv-header{display:flex!important;position:relative!important;z-index:60!important;box-sizing:border-box;width:100%!important;height:58px!important;min-height:58px!important;max-height:58px!important;flex:0 0 58px!important;align-items:center;justify-content:space-between;gap:8px;padding:7px 8px;border-bottom:1px solid var(--fill-quarternary,rgba(128,128,128,.25));overflow:hidden;background:var(--material-sidepane,#fff);pointer-events:auto!important;}",
         ".zai-reader-alphaxiv-identity{display:flex;position:relative;z-index:61;align-items:center;gap:7px;min-width:0;flex:1 1 auto;overflow:hidden;pointer-events:none;}",
         ".zai-reader-alphaxiv-badge{display:inline-flex;align-items:center;justify-content:center;width:29px;height:25px;flex:0 0 auto;border-radius:5px;background:#d34b38;color:#fff;font-size:11px;font-weight:800;}",
         ".zai-reader-alphaxiv-identity-text{display:flex;min-width:0;max-width:180px;flex-direction:column;overflow:hidden;line-height:1.2;}",
         ".zai-reader-alphaxiv-identity-text strong{font-size:12px;}",
         ".zai-reader-alphaxiv-status{max-width:130px;overflow:hidden;color:var(--fill-secondary,#68727d);font-size:10px;text-overflow:ellipsis;white-space:nowrap;}",
         ".zai-reader-alphaxiv-controls{display:flex!important;position:relative!important;z-index:62!important;box-sizing:border-box;width:340px!important;height:30px!important;align-items:center;justify-content:flex-end;gap:3px;min-width:340px!important;max-width:340px!important;flex:0 0 340px!important;flex-wrap:nowrap!important;overflow:visible;pointer-events:auto!important;}",
-        ".zai-reader-alphaxiv-controls button{position:relative;z-index:62;flex:0 0 auto;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation;-moz-user-select:none;user-select:none;}",
+         ".zai-reader-alphaxiv-controls button,.zai-reader-alphaxiv-controls toolbarbutton{appearance:none!important;position:relative;z-index:62;flex:0 0 auto;cursor:pointer!important;pointer-events:auto!important;touch-action:manipulation;-moz-user-select:none;user-select:none;}",
         ".zai-reader-alphaxiv-mode-label{display:inline-flex;align-items:center;box-sizing:border-box;height:30px;padding:0 7px;border:1px solid rgba(211,75,56,.34);border-radius:4px;background:rgba(211,75,56,.08);color:#8f3024;font-size:11px;font-weight:700;white-space:nowrap;}",
         ".zai-reader-alphaxiv-segments{display:inline-flex;align-items:center;box-sizing:border-box;height:30px;overflow:hidden;border:1px solid var(--fill-quarternary,rgba(128,128,128,.32));border-radius:4px;background:var(--material-sidepane,#fff);}",
         ".zai-reader-alphaxiv-segment{box-sizing:border-box;width:62px;height:28px;min-width:62px;padding:2px 7px;border:0;border-right:1px solid var(--fill-quarternary,rgba(128,128,128,.25));background:transparent;color:var(--fill-secondary,#59636d);font-size:11px;cursor:pointer;white-space:nowrap;}",
