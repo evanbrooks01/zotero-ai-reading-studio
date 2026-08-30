@@ -1873,6 +1873,91 @@ var ZoteroAIReading = {
     return owner;
   },
 
+  getItemByLibraryAndKey(libraryID, key) {
+    try {
+      if (libraryID == null || !key || typeof Zotero.Items.getByLibraryAndKey !== "function") {
+        return null;
+      }
+      return Zotero.Items.getByLibraryAndKey(libraryID, key) || null;
+    }
+    catch (_) {
+      return null;
+    }
+  },
+
+  async getPersistedReaderConversationItem(item) {
+    if (!item || item.deleted || item.id == null) {
+      return null;
+    }
+    let fresh = this.getItemByID(item.id);
+    if (!fresh || fresh.deleted) {
+      return null;
+    }
+    try {
+      let itemID = await Zotero.DB.valueQueryAsync(
+        "SELECT itemID FROM items WHERE itemID = ?",
+        [Number(fresh.id)]
+      );
+      return itemID ? fresh : null;
+    }
+    catch (error) {
+      // The item cache remains a useful fallback while another library
+      // transaction temporarily prevents this read-only query.
+      this.log("conversation item persistence check fell back to cache: " +
+        (error.stack || error.message || String(error)));
+      return fresh;
+    }
+  },
+
+  async resolveReaderConversationOwner(state, options = {}) {
+    if (!state) {
+      return null;
+    }
+    let delays = options.waitForImport ? [0, 80, 240, 600] : [0];
+    for (let delay of delays) {
+      if (delay) {
+        await Zotero.Promise.delay(delay);
+      }
+
+      // Prefer the stable library/key pair. Zotero can allocate an item ID to
+      // an import that later rolls back, while a retried import keeps the key
+      // and receives a different ID.
+      let source = this.getItemByLibraryAndKey(state.sourceLibraryID, state.sourceAttachmentKey) ||
+        this.getItemByID(state.sourceAttachmentID);
+      if (source && !source.deleted) {
+        if (state.sourceAttachmentID != null && String(state.sourceAttachmentID) !== String(source.id)) {
+          this.unindexConversation(state.sourceAttachmentID);
+        }
+        state.sourceAttachmentID = source.id;
+        state.sourceAttachmentKey = source.key || state.sourceAttachmentKey || "";
+        state.sourceLibraryID = source.libraryID ?? state.sourceLibraryID ?? null;
+      }
+
+      let candidates = [];
+      let addCandidate = (item) => {
+        if (item && !item.deleted &&
+            !candidates.some((candidate) => String(candidate.id) === String(item.id))) {
+          candidates.push(item);
+        }
+      };
+      addCandidate(source?.parentItem || this.getItemByID(source?.parentID));
+      addCandidate(this.getItemByLibraryAndKey(state.ownerLibraryID, state.ownerItemKey));
+      addCandidate(this.getItemByID(state.ownerItem?.id));
+      addCandidate(source);
+
+      for (let candidate of candidates) {
+        let persisted = await this.getPersistedReaderConversationItem(candidate);
+        if (persisted) {
+          state.ownerItem = persisted;
+          state.ownerItemKey = persisted.key || state.ownerItemKey || "";
+          state.ownerLibraryID = persisted.libraryID ?? state.ownerLibraryID ?? null;
+          return persisted;
+        }
+      }
+    }
+    return null;
+  },
+
   getReaderChatState(reader, ownerItem) {
     let state = this.readerChatStates.get(reader);
     if (state && state.ownerItem?.id === ownerItem?.id) {
@@ -1885,13 +1970,27 @@ var ZoteroAIReading = {
       if (typeof state.activeSessionID !== "string") {
         state.activeSessionID = "";
       }
+      state.sourceAttachmentKey ||= reader?._item?.key || "";
+      state.sourceLibraryID ??= reader?._item?.libraryID ?? null;
+      state.ownerItemKey ||= ownerItem?.key || "";
+      state.ownerLibraryID ??= ownerItem?.libraryID ?? null;
+      state.pendingConversationSnapshot ??= null;
+      state.conversationSaveRetryPromise ??= null;
+      state.conversationSaveRetryGeneration ??= -1;
       return state;
     }
     state = {
       reader,
       ownerItem,
       sourceAttachmentID: reader?._item?.id || null,
+      sourceAttachmentKey: reader?._item?.key || "",
+      sourceLibraryID: reader?._item?.libraryID ?? null,
+      ownerItemKey: ownerItem?.key || "",
+      ownerLibraryID: ownerItem?.libraryID ?? null,
       conversationNote: null,
+      pendingConversationSnapshot: null,
+      conversationSaveRetryPromise: null,
+      conversationSaveRetryGeneration: -1,
       sessions: [],
       activeSessionID: "",
       messages: [],
@@ -2274,7 +2373,10 @@ var ZoteroAIReading = {
       return state.loadPromise;
     }
     state.loadPromise = (async () => {
-      let note = await this.findReaderConversationNote(state.ownerItem, state.sourceAttachmentID);
+      let owner = await this.resolveReaderConversationOwner(state, { waitForImport: true });
+      let note = owner
+        ? await this.findReaderConversationNote(owner, state.sourceAttachmentID)
+        : null;
       let payload = note ? this.getConversationNotePayload(note) : null;
       let data = this.normalizeConversationData(payload || {});
       state.conversationNote = note;
@@ -2330,20 +2432,104 @@ var ZoteroAIReading = {
     };
   },
 
-  async saveReaderConversationSnapshot(state, snapshot) {
-    if (!state?.ownerItem || state.ownerItem.deleted) {
-      return;
+  async saveReaderConversationSnapshot(state, snapshot, options = {}) {
+    if (!state) {
+      return false;
     }
     let note = state.conversationNote;
-    if (!note || note.deleted) {
+    if (note) {
+      note = note.id == null ? null : this.getItemByID(note.id);
+    }
+    if (note?.deleted) {
+      note = null;
+    }
+
+    let owner = await this.resolveReaderConversationOwner(state);
+    if (!owner && !note) {
+      if (options.scheduleRetry !== false) {
+        this.scheduleReaderConversationSaveRetry(state, snapshot);
+      }
+      return false;
+    }
+
+    let created = false;
+    if (!note) {
       note = new Zotero.Item("note");
-      note.libraryID = state.ownerItem.libraryID;
-      note.parentID = state.ownerItem.id;
-      state.conversationNote = note;
+      note.libraryID = owner.libraryID;
+      note.parentID = owner.id;
+      created = true;
     }
     note.setNote(this.getConversationNoteMarkup(snapshot));
-    await note.saveTx();
+    try {
+      await note.saveTx();
+    }
+    catch (error) {
+      if (created) {
+        state.conversationNote = null;
+      }
+      if (/FOREIGN KEY constraint failed|itemNotes/i.test(String(error?.message || error))) {
+        this.log("conversation save deferred until Zotero finishes importing the PDF: " +
+          (error.stack || error.message || String(error)));
+        if (options.scheduleRetry !== false) {
+          this.scheduleReaderConversationSaveRetry(state, snapshot);
+        }
+        return false;
+      }
+      throw error;
+    }
+    state.conversationNote = note;
+    state.pendingConversationSnapshot = null;
     this.indexConversation(state, note);
+    return true;
+  },
+
+  scheduleReaderConversationSaveRetry(state, snapshot) {
+    if (!state || !snapshot) {
+      return;
+    }
+    state.pendingConversationSnapshot = snapshot;
+    let generation = state.generation;
+    if (state.conversationSaveRetryPromise &&
+        state.conversationSaveRetryGeneration === generation) {
+      return;
+    }
+
+    let token = {};
+    state.conversationSaveRetryGeneration = generation;
+    state.conversationSaveRetryPromise = token;
+    let retryPromise = (async () => {
+      for (let delay of [250, 750, 1500, 3000, 6000, 12000]) {
+        await Zotero.Promise.delay(delay);
+        if (state.generation !== generation || !state.pendingConversationSnapshot) {
+          return;
+        }
+        try {
+          let saved = await this.saveReaderConversationSnapshot(
+            state,
+            state.pendingConversationSnapshot,
+            { scheduleRetry: false }
+          );
+          if (saved) {
+            return;
+          }
+        }
+        catch (error) {
+          this.log("conversation save retry failed: " + (error.stack || error.message || String(error)));
+        }
+      }
+      this.log("conversation save remains pending because the Zotero PDF item is not persisted yet");
+    })().catch((error) => {
+      this.log("conversation save retry stopped: " + (error.stack || error.message || String(error)));
+    });
+    token.promise = retryPromise.finally(() => {
+      if (state.conversationSaveRetryPromise === token) {
+        if (state.generation !== generation) {
+          state.pendingConversationSnapshot = null;
+        }
+        state.conversationSaveRetryPromise = null;
+        state.conversationSaveRetryGeneration = -1;
+      }
+    });
   },
 
   queueReaderConversationSave(state) {
@@ -2357,7 +2543,16 @@ var ZoteroAIReading = {
         if (state.generation !== generation) {
           return;
         }
-        await this.saveReaderConversationSnapshot(state, snapshot);
+        try {
+          return await this.saveReaderConversationSnapshot(state, snapshot);
+        }
+        catch (error) {
+          // Persistence errors must not prevent the actual Responses request
+          // from running. Keep the current chat in memory and retry later.
+          this.log("conversation save failed without blocking chat: " +
+            (error.stack || error.message || String(error)));
+          return false;
+        }
       });
     return state.savePromise;
   },
@@ -4332,7 +4527,7 @@ var ZoteroAIReading = {
     return `
 (function() {
   const messageName = ${JSON.stringify(messageName)};
-      const bridgeVersion = messageName + ":v9";
+      const bridgeVersion = messageName + ":v11";
   const win = content;
   const doc = win && win.document;
   if (!doc || !/^(?:www\\.)?alphaxiv\\.org$/i.test(String(win.location && win.location.hostname || ""))) {
@@ -4889,11 +5084,66 @@ var ZoteroAIReading = {
     selectionQuestion.style.top = top + "px";
   }
 
+  function captureSelectionScrollState() {
+    let nodes = [];
+    let seen = new Set();
+    let remember = (node) => {
+      if (!node || seen.has(node)) {
+        return;
+      }
+      seen.add(node);
+      nodes.push({
+        node,
+        left: Number(node.scrollLeft || 0),
+        top: Number(node.scrollTop || 0)
+      });
+    };
+    remember(doc.scrollingElement);
+    remember(doc.documentElement);
+    remember(doc.body);
+    let selectedNode = win.getSelection?.()?.anchorNode;
+    let current = selectedNode?.nodeType === 1 ? selectedNode : selectedNode?.parentElement;
+    while (current && current !== doc) {
+      remember(current);
+      current = current.parentElement;
+    }
+    return {
+      x: Number(win.scrollX || win.pageXOffset || 0),
+      y: Number(win.scrollY || win.pageYOffset || 0),
+      nodes
+    };
+  }
+
+  function restoreSelectionScrollState(snapshot) {
+    if (!snapshot) {
+      return;
+    }
+    for (let entry of snapshot.nodes || []) {
+      if (!entry.node?.isConnected && entry.node !== doc.documentElement && entry.node !== doc.body) {
+        continue;
+      }
+      entry.node.scrollLeft = entry.left;
+      entry.node.scrollTop = entry.top;
+    }
+    if (Number(win.scrollX || 0) !== snapshot.x || Number(win.scrollY || 0) !== snapshot.y) {
+      win.scrollTo(snapshot.x, snapshot.y);
+    }
+  }
+
+  function restoreSelectionScrollStateSoon(snapshot) {
+    restoreSelectionScrollState(snapshot);
+    win.requestAnimationFrame?.(() => restoreSelectionScrollState(snapshot));
+    for (let delay of [0, 80, 240, 600]) {
+      win.setTimeout(() => restoreSelectionScrollState(snapshot), delay);
+    }
+  }
+
   function ensureSelectionOverlay() {
     if (selectionOverlay && selectionOverlay.isConnected) {
       return selectionOverlay;
     }
-    let parent = doc.documentElement || doc.body;
+    let scrollState = captureSelectionScrollState();
+    let parent = doc.body || doc.documentElement;
     if (!parent) {
       return null;
     }
@@ -5010,6 +5260,7 @@ var ZoteroAIReading = {
     selectionRoot.appendChild(selectionAction);
     selectionRoot.appendChild(selectionQuestion);
     parent.appendChild(selectionOverlay);
+    restoreSelectionScrollStateSoon(scrollState);
     return selectionOverlay;
   }
 
@@ -5052,6 +5303,7 @@ var ZoteroAIReading = {
   }
 
   function openSelectionQuestion() {
+    let scrollState = captureSelectionScrollState();
     if (!selectionPayload || !selectionPayload.selectedText || !ensureSelectionOverlay()) {
       return;
     }
@@ -5062,7 +5314,13 @@ var ZoteroAIReading = {
     selectionError.textContent = "";
     selectionQuestion.hidden = false;
     positionSelectionQuestion();
-    selectionInput.focus();
+    try {
+      selectionInput.focus({ preventScroll: true });
+    }
+    catch (_) {
+      selectionInput.focus();
+    }
+    restoreSelectionScrollStateSoon(scrollState);
   }
 
   function closeSelectionQuestion(restoreAction) {

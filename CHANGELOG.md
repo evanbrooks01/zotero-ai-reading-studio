@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.20
+
+- Keeps the alphaXiv brief at its current scroll position when the first contextual-question composer is created and focused.
+- Resolves conversation parents from persisted Zotero items before saving, including library/key recovery after a rolled-back local PDF import.
+- Defers and retries conversation-note persistence without blocking the Responses request when Zotero has not committed the PDF item yet.
+
 ## 0.7.19
 
 - Replaced the unreliable remote-page brief controls with native Zotero XUL toolbar buttons, using one `command` event per press for language, AI, refresh, external, and PDF actions.

@@ -79,7 +79,7 @@ function verifySelectionContext() {
   assert.match(frameScript, /data-zai-header-action/);
   assert.match(frameScript, /kind: "header-action"/);
   assert.match(frameScript, /sync-header/);
-  assert.match(frameScript, /bridgeVersion = messageName \+ ":v9"/);
+  assert.match(frameScript, /bridgeVersion = messageName \+ ":v11"/);
   assert.match(frameScript, /attachShadow/);
   assert.match(frameScript, /let parent = doc\.body \|\| doc\.documentElement/);
   assert.match(frameScript, /toolbarRect\?\.width >= 80/);
@@ -532,6 +532,11 @@ function verifyPanelContract() {
   assert.match(selectionSource, /openAlphaXivQuestionPopover\(state, \{ focus: true \}\)/);
   assert.match(frameScript, /openSelectionQuestion\(\)/);
   assert.match(frameScript, /selectionAction\.hidden = true/);
+  assert.match(frameScript, /function captureSelectionScrollState\(\)/);
+  assert.match(frameScript, /let parent = doc\.body \|\| doc\.documentElement/);
+  assert.match(frameScript, /selectionInput\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(frameScript, /restoreSelectionScrollStateSoon\(scrollState\)/);
+  assert.match(frameScript, /\[0, 80, 240, 600\]/);
   assert.match(frameScript, /Ask the assistant/);
   assert.match(frameScript, /hideNativeAssistantLauncher/);
   assert.match(frameScript, /const frameHeaderEnabled = false/);
