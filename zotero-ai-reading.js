@@ -1248,10 +1248,9 @@ var ZoteroAIReading = {
           if (targetButton.id === this.READER_ALPHAXIV_BUTTON_ID &&
               this.isReaderAlphaXivSurfaceActive(reader)) {
             // The alphaXiv header occupies the same top strip as the native
-            // PDF toolbar. Ignore a retargeted toolbar hit while the brief is
-            // already visible; its explicit x button is the route back to PDF.
-            event.preventDefault?.();
-            event.stopPropagation?.();
+            // PDF toolbar. Do not toggle the local PDF surface for an
+            // ambiguous retargeted hit, but also do not cancel the event: the
+            // real brief control still needs a chance to receive its click.
             return;
           }
           event.preventDefault?.();
@@ -1370,9 +1369,8 @@ var ZoteroAIReading = {
             }
             if (this.isReaderAuxiliaryPanelEvent(event, reader) ||
                 (button.id === this.READER_ALPHAXIV_BUTTON_ID && this.isReaderAlphaXivSurfaceActive(reader))) {
-              event?.preventDefault?.();
-              event?.stopImmediatePropagation?.();
-              event?.stopPropagation?.();
+              // The overlay is inert while the brief is visible. Leave the
+              // event uncancelled so a retargeted HTML control can handle it.
               return;
             }
             event?.preventDefault?.();

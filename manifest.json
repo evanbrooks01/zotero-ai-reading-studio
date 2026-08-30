@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero AI Reading Studio",
-  "version": "0.7.11",
+  "version": "0.7.12",
   "description": "An independent Zotero reading workspace with Responses chat, per-paper conversations, selection translation, retrieval, and online paper briefs.",
   "homepage_url": "https://github.com/Shanfu2021/zotero-ai-reading-studio",
   "icons": {

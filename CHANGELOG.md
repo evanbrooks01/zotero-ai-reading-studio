@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.12
+
+- Allowed ambiguous alphaXiv toolbar hits to reach the real brief control without cancelling the event or toggling back to the local PDF.
+
 ## 0.7.11
 
 - Suspended transparent PDF toolbar hit targets while the online brief is active, so the brief AI button receives clicks immediately.
