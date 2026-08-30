@@ -177,6 +177,62 @@ function verifyToolbarBridgeIsolation() {
   }
 }
 
+function verifyToolbarOverlaySuspension() {
+  const styleValues = new Map();
+  const style = {
+    setProperty(name, value) {
+      styleValues.set(name, String(value));
+    },
+    removeProperty(name) {
+      styleValues.delete(name);
+    }
+  };
+  const attributes = new Map();
+  const overlay = {
+    style,
+    setAttribute(name, value) {
+      attributes.set(name, String(value));
+    },
+    removeAttribute(name) {
+      attributes.delete(name);
+    },
+    getAttribute(name) {
+      return attributes.get(name) || "";
+    }
+  };
+  const button = {
+    id: sut.READER_ALPHAXIV_BUTTON_ID,
+    isConnected: true,
+    disabled: false,
+    getAttribute: () => "Brief AI",
+    getBoundingClientRect: () => ({ left: 18, top: 9, width: 44, height: 29 })
+  };
+  const iframe = {
+    _zaiReaderToolbarButtonOverlays: new Map([
+      [button.id, { overlay, button }]
+    ]),
+    getBoundingClientRect: () => ({ left: 100, top: 50, right: 900, bottom: 700 })
+  };
+  const reader = { _iframe: iframe };
+  const originalActive = sut.isReaderAlphaXivSurfaceActive;
+  try {
+    sut.isReaderAlphaXivSurfaceActive = () => true;
+    assert.strictEqual(sut.positionReaderToolbarButtonOverlay(reader, button), true);
+    assert.strictEqual(attributes.get("data-zai-toolbar-overlay-suspended"), "true");
+    assert.strictEqual(styleValues.get("display"), "none");
+    assert.strictEqual(styleValues.get("pointer-events"), "none");
+
+    sut.isReaderAlphaXivSurfaceActive = () => false;
+    assert.strictEqual(sut.syncReaderToolbarButtonOverlays(reader), true);
+    assert.strictEqual(attributes.has("data-zai-toolbar-overlay-suspended"), false);
+    assert.strictEqual(styleValues.get("display"), "block");
+    assert.strictEqual(styleValues.get("pointer-events"), "auto");
+  }
+  finally {
+    sut.isReaderAlphaXivSurfaceActive = originalActive;
+  }
+}
+
 function verifyExistingPaneAdoptionAndBlankDetection() {
   const webView = {
     currentURI: { spec: "about:blank" },
@@ -330,6 +386,9 @@ function verifyPanelContract() {
   assert.match(source, /isReaderAuxiliaryPanelEvent/);
   assert.match(source, /isReaderAlphaXivSurfaceActive/);
   assert.match(source, /data-zai-reader-toolbar-overlay/);
+  assert.match(source, /data-zai-toolbar-overlay-suspended/);
+  assert.match(source, /syncReaderToolbarButtonOverlays/);
+  assert.match(source, /min-width:42px/);
   assert.match(source, /older add-on version may still carry the old/);
   assert.match(source, /toolbar's "简读" button/);
   assert.match(paneSource, /toggleReaderChatPane\(state\.reader/);
@@ -351,6 +410,7 @@ verifyRoutesAndDefaults();
 verifySelectionContext();
 verifyReadingSurfaceSwitch();
 verifyToolbarBridgeIsolation();
+verifyToolbarOverlaySuspension();
 verifyExistingPaneAdoptionAndBlankDetection();
 verifyPanelContract();
 console.log("alphaXiv panel checks passed");

@@ -1431,7 +1431,27 @@ var ZoteroAIReading = {
         ? iframe._zaiReaderToolbarButtonOverlays.get(button?.id)
         : iframe?._zaiReaderToolbarButtonOverlay;
       let overlay = overlayState?.overlay;
-      if (!iframe || !overlay || !button?.isConnected) {
+      if (!iframe || !overlay) {
+        return false;
+      }
+
+      let style = overlay.style;
+      // The transparent PDF hit targets live in the outer reader document and
+      // use a deliberately high z-index. While the online brief is visible,
+      // they must leave the whole reading surface alone so its own controls
+      // receive the gesture. Keep the nodes mounted and restore them when the
+      // local PDF surface becomes active again.
+      if (this.isReaderAlphaXivSurfaceActive(reader)) {
+        overlay.removeAttribute("hidden");
+        overlay.setAttribute("data-zai-toolbar-overlay-suspended", "true");
+        style.setProperty("display", "none", "important");
+        style.setProperty("visibility", "hidden", "important");
+        style.setProperty("pointer-events", "none", "important");
+        return true;
+      }
+      overlay.removeAttribute("data-zai-toolbar-overlay-suspended");
+      if (!button?.isConnected) {
+        overlay.setAttribute("hidden", "true");
         return false;
       }
 
@@ -1454,7 +1474,6 @@ var ZoteroAIReading = {
         overlay.setAttribute("tooltiptext", buttonTitle);
         overlay.setAttribute("aria-label", buttonTitle);
       }
-      let style = overlay.style;
       style.setProperty("position", "fixed", "important");
       style.setProperty("left", Math.round(iframeRect.left + buttonRect.left) + "px", "important");
       style.setProperty("top", Math.round(iframeRect.top + buttonRect.top) + "px", "important");
@@ -1468,6 +1487,7 @@ var ZoteroAIReading = {
       style.setProperty("background", "transparent", "important");
       style.setProperty("color", "transparent", "important");
       style.setProperty("display", "block", "important");
+      style.setProperty("visibility", "visible", "important");
       style.setProperty("opacity", "0", "important");
       style.setProperty("pointer-events", "auto", "important");
       style.setProperty("z-index", "2147483647", "important");
@@ -1476,6 +1496,29 @@ var ZoteroAIReading = {
     }
     catch (error) {
       this.log("positionReaderToolbarButtonOverlay failed: " + (error.stack || error.message || String(error)));
+      return false;
+    }
+  },
+
+  syncReaderToolbarButtonOverlays(reader) {
+    try {
+      let iframe = reader?._iframe;
+      if (!iframe) {
+        return false;
+      }
+      let states = iframe._zaiReaderToolbarButtonOverlays instanceof Map
+        ? Array.from(iframe._zaiReaderToolbarButtonOverlays.values())
+        : (iframe._zaiReaderToolbarButtonOverlay ? [iframe._zaiReaderToolbarButtonOverlay] : []);
+      let updated = false;
+      for (let state of states) {
+        if (state?.button) {
+          updated = this.positionReaderToolbarButtonOverlay(reader, state.button) || updated;
+        }
+      }
+      return updated;
+    }
+    catch (error) {
+      this.log("syncReaderToolbarButtonOverlays failed: " + (error.stack || error.message || String(error)));
       return false;
     }
   },
@@ -2746,6 +2789,7 @@ var ZoteroAIReading = {
         alphaXivButton.setAttribute("aria-pressed", String(alphaXivOpen));
         this.updateReaderAlphaXivToolbarButton(reader, alphaXivButton, alphaXivOpen);
       }
+      this.syncReaderToolbarButtonOverlays(reader);
     }
     catch (error) {
       this.log("updateReaderToolbarButtonState failed: " + (error.stack || error.message || String(error)));
@@ -3057,7 +3101,11 @@ var ZoteroAIReading = {
       button.title = title;
       button.setAttribute("aria-label", title);
       button.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
+        // Stop the outer reader bridge from seeing the gesture, but do not
+        // cancel the browser's default pointer-to-click synthesis. Cancelling
+        // pointerdown can make a normal press fail to produce a click in
+        // Gecko/XUL reader windows.
+        event.stopImmediatePropagation?.();
         event.stopPropagation();
       }, true);
       // Run the callback in the target phase and consume the event completely.
@@ -3140,13 +3188,6 @@ var ZoteroAIReading = {
       });
     });
     state.alphaChatButton = aiButton;
-    for (let type of ["pointerdown", "mousedown", "mouseup", "pointerup"]) {
-      aiButton.addEventListener(type, (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation?.();
-        event.stopPropagation();
-      }, true);
-    }
     aiButton.classList.add("zai-reader-alphaxiv-ai-button");
     controls.appendChild(aiButton);
     controls.appendChild(makeIconButton("↻", "刷新在线内容", () =>
@@ -3412,6 +3453,10 @@ var ZoteroAIReading = {
         pane.style?.setProperty?.("z-index", "0", "important");
         pane.setAttribute?.("aria-hidden", "true");
       }
+      // Repositioning also toggles the outer PDF hit targets. This is
+      // intentionally immediate so a newly opened brief cannot lose its
+      // first click while the reader layout is settling.
+      this.syncReaderToolbarButtonOverlays(state.reader);
       return true;
     }
     catch (error) {
@@ -9515,7 +9560,7 @@ var ZoteroAIReading = {
         ".zai-reader-alphaxiv-segment:last-child{border-right:0;}",
         ".zai-reader-alphaxiv-segment[data-active]{background:#d34b38;color:#fff;}",
         ".zai-reader-alphaxiv-segment:disabled{opacity:.42;cursor:default;}",
-        ".zai-reader-alphaxiv-ai-button{width:auto;min-width:31px;padding:0 7px;color:#147a6c;font-size:11px;font-weight:800;}",
+        ".zai-reader-alphaxiv-ai-button{width:auto;min-width:42px;min-height:29px;padding:0 10px;color:#147a6c;font-size:11px;font-weight:800;pointer-events:auto!important;touch-action:manipulation;}",
         ".zai-reader-alphaxiv-ai-button[data-active='true']{background:#147a6c;color:#fff;border-color:#147a6c;}",
         ".zai-reader-alphaxiv-selection{display:none!important;}",
         ".zai-reader-alphaxiv-selection[hidden]{display:none!important;}",

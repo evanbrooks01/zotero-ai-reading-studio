@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.11
+
+- Suspended transparent PDF toolbar hit targets while the online brief is active, so the brief AI button receives clicks immediately.
+- Preserved click synthesis for brief controls and enlarged the AI button hit area for more reliable direct presses.
+
 ## 0.7.10
 
 - Rebuilt stale transparent toolbar overlays after an add-on upgrade so the alphaXiv AI guard is always active.
