@@ -19,7 +19,10 @@ $Entries = @(
   @{ Source = "zotero-ai-reading.js"; Entry = "zotero-ai-reading.js" },
   @{ Source = "floating-window.xhtml"; Entry = "floating-window.xhtml" },
   @{ Source = "preferences.xhtml"; Entry = "preferences.xhtml" },
-  @{ Source = "icons\icon.png"; Entry = "icons/icon.png" }
+  @{ Source = "icons\icon.png"; Entry = "icons/icon.png" },
+  @{ Source = "vendor\katex\katex.min.js"; Entry = "vendor/katex/katex.min.js" },
+  @{ Source = "vendor\katex\LICENSE"; Entry = "vendor/katex/LICENSE" },
+  @{ Source = "vendor\katex\README.md"; Entry = "vendor/katex/README.md" }
 )
 
 Add-Type -AssemblyName System.IO.Compression

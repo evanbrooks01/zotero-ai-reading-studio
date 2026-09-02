@@ -85,7 +85,7 @@
 3. 安装后在 `编辑 -> 设置 -> AI Reading Assistant` 中填写 API URL 和 Key。
 4. 在 PDF 阅读器工具栏打开 `AI`、`译` 或 `简读`。
 
-当前版本也可以直接下载：[zotero-ai-reading-0.7.20.xpi](https://github.com/Shanfu2021/zotero-ai-reading-studio/releases/download/v0.7.20/zotero-ai-reading-0.7.20.xpi)。
+当前版本也可以直接下载：[zotero-ai-reading-0.7.21.xpi](https://github.com/Shanfu2021/zotero-ai-reading-studio/releases/download/v0.7.21/zotero-ai-reading-0.7.21.xpi)。
 
 ## 配置
 

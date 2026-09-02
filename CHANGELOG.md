@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.21
+
+- Renders inline and display LaTeX in reading-assistant replies with bundled KaTeX MathML, including formulas already stored in paper conversations.
+- Makes assistant replies and translations reliably selectable and copyable, with dedicated copy controls as a fallback to `Ctrl+C`.
+- Treats the AI URL and Key as one shared connection and automatically initializes both reading and translation model settings on first configuration.
+- Replaces the settings-page model text fields with real, independently saved reading and translation dropdowns populated by the fetched model list.
+- Supports persistent, independent `Ctrl` + wheel font sizing in the reading-assistant and translation panels.
+
 ## 0.7.20
 
 - Keeps the alphaXiv brief at its current scroll position when the first contextual-question composer is created and focused.

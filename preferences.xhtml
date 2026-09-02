@@ -27,25 +27,28 @@
 
     <hbox align="center" class="zai-row">
       <label value="API URL:" class="zai-label"/>
-      <html:input type="text" class="zai-input" placeholder="https://api.example.com"
+      <html:input id="zai-api-url" type="text" class="zai-input" placeholder="https://api.example.com"
+        onchange="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.scheduleSharedAIConnectionInitialization(document)"
         preference="extensions.zotero-ai-reading.translationAPIURL"/>
     </hbox>
 
     <hbox align="center" class="zai-row">
       <label value="API key:" class="zai-label"/>
-      <html:input type="password" class="zai-input"
+      <html:input id="zai-api-key" type="password" class="zai-input"
+        onchange="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.scheduleSharedAIConnectionInitialization(document)"
         preference="extensions.zotero-ai-reading.translationAPIKey"/>
     </hbox>
 
     <hbox align="center" class="zai-row">
       <label value="Reading model:" class="zai-label"/>
-      <html:input id="zai-chat-model" type="text" class="zai-input" list="zai-chat-models"
+      <html:select id="zai-chat-model" class="zai-input"
         onfocus="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.populateChatModelChoices(document)"
-        preference="extensions.zotero-ai-reading.chatModel"/>
+        onchange="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.setPreferenceModel('chat', this.value, document)">
+        <html:option value="">Fetch models to choose</html:option>
+      </html:select>
       <button id="zai-refresh-translation-models" label="Refresh models"
         oncommand="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.refreshTranslationModels(document)"/>
     </hbox>
-    <html:datalist id="zai-chat-models"></html:datalist>
 
     <html:div class="zai-sec">Chat and retrieval</html:div>
 
@@ -81,11 +84,12 @@
 
     <hbox align="center" class="zai-row">
       <label value="Translation model:" class="zai-label"/>
-      <html:input id="zai-translation-model" type="text" class="zai-input" list="zai-translation-models"
+      <html:select id="zai-translation-model" class="zai-input"
         onfocus="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.populateTranslationModelChoices(document)"
-        preference="extensions.zotero-ai-reading.translationModel"/>
+        onchange="Zotero.ZoteroAIReading &amp;&amp; Zotero.ZoteroAIReading.setPreferenceModel('translation', this.value, document)">
+        <html:option value="">Fetch models to choose</html:option>
+      </html:select>
     </hbox>
-    <html:datalist id="zai-translation-models"></html:datalist>
 
     <hbox align="center" class="zai-row">
       <label value="Translation reasoning:" class="zai-label"/>

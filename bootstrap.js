@@ -16,6 +16,12 @@ async function startup({ id, version, rootURI }) {
 
   await Zotero.initializationPromise;
 
+  try {
+    Services.scriptloader.loadSubScript(rootURI + "vendor/katex/katex.min.js");
+  }
+  catch (error) {
+    log("KaTeX load failed; formulas will remain readable as source: " + error);
+  }
   Services.scriptloader.loadSubScript(rootURI + "zotero-ai-reading.js");
   ZoteroAIReading.init({ id, version, rootURI });
 

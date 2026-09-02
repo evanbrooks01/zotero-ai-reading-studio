@@ -1,4 +1,4 @@
-/* global Zotero, Services, Cc, Ci */
+/* global Zotero, Services, Cc, Ci, katex */
 
 var ZoteroAIReading = {
   id: null,
@@ -52,6 +52,8 @@ var ZoteroAIReading = {
     openInReaderPane: true,
     readerPaneWidth: 520,
     translationPaneWidth: 340,
+    chatFontSize: 13,
+    translationFontSize: 13,
     alphaXivPaneWidth: 520,
     alphaXivLanguage: "zh",
     alphaXivMode: "paper",
@@ -2778,6 +2780,61 @@ var ZoteroAIReading = {
     return candidates.sort((a, b) => score(b) - score(a) || a.localeCompare(b))[0] || "";
   },
 
+  pickDefaultTranslationModel(models, fallbackModel = "") {
+    let candidates = Array.from(new Set((models || []).map((model) => String(model || "").trim()).filter(Boolean)));
+    for (let preferred of ["gpt-5.4-mini", "gpt-5.6-luna"]) {
+      if (candidates.includes(preferred)) {
+        return preferred;
+      }
+    }
+    return candidates.find((model) => /mini|nano|haiku|flash|luna/i.test(model)) ||
+      candidates.find((model) => /terra/i.test(model)) ||
+      candidates[0] || String(fallbackModel || "").trim();
+  },
+
+  storeSharedAIModels(models, doc = null) {
+    let choices = Array.from(new Set((models || []).map((model) => String(model || "").trim()).filter(Boolean)));
+    if (!choices.length) {
+      return { models: [], chatModel: "", translationModel: "" };
+    }
+    Zotero.Prefs.set(this.PREF_PREFIX + "chatModelChoices", JSON.stringify(choices), true);
+    Zotero.Prefs.set(this.PREF_PREFIX + "translationModelChoices", JSON.stringify(choices), true);
+
+    let chatModel = String(this.getPref("chatModel") || "").trim();
+    if (!choices.includes(chatModel)) {
+      chatModel = choices.includes("gpt-5.6-sol") ? "gpt-5.6-sol" : this.pickDefaultChatModel(choices);
+      Zotero.Prefs.set(this.PREF_PREFIX + "chatModel", chatModel, true);
+    }
+    let translationModel = String(this.getPref("translationModel") || "").trim();
+    if (!choices.includes(translationModel)) {
+      translationModel = this.pickDefaultTranslationModel(choices, chatModel);
+      Zotero.Prefs.set(this.PREF_PREFIX + "translationModel", translationModel, true);
+    }
+
+    this.populateChatModelChoices(doc, choices);
+    this.populateTranslationModelChoices(doc, choices);
+    let chatInput = doc?.getElementById?.("zai-chat-model");
+    if (chatInput) {
+      chatInput.value = chatModel;
+      chatInput.setAttribute("value", chatModel);
+    }
+    let translationInput = doc?.getElementById?.("zai-translation-model");
+    if (translationInput) {
+      translationInput.value = translationModel;
+      translationInput.setAttribute("value", translationModel);
+    }
+    for (let state of this.readerChatStates.values()) {
+      this.populateReaderChatModelSelect(state?.modelSelect);
+    }
+    for (let state of this.readerTranslationStates.values()) {
+      this.populateReaderTranslationModelSelect(state?.modelSelect);
+      if (state?.reasoningSelect) {
+        this.populateReasoningSelect(state.reasoningSelect, "translation", translationModel);
+      }
+    }
+    return { models: choices, chatModel, translationModel };
+  },
+
   populateReaderChatModelSelect(select) {
     if (!select) {
       return;
@@ -2813,10 +2870,7 @@ var ZoteroAIReading = {
       if (!models.length) {
         throw new Error("服务没有返回可用模型。");
       }
-      Zotero.Prefs.set(this.PREF_PREFIX + "chatModelChoices", JSON.stringify(models), true);
-      if (!String(this.getPref("chatModel") || "").trim()) {
-        Zotero.Prefs.set(this.PREF_PREFIX + "chatModel", this.pickDefaultChatModel(models), true);
-      }
+      this.storeSharedAIModels(models);
       state.statusMessage = "";
       state.statusState = "";
     }
@@ -2871,23 +2925,12 @@ var ZoteroAIReading = {
       if (!models.length) {
         throw new Error("服务没有返回可用模型。");
       }
-      Zotero.Prefs.set(this.PREF_PREFIX + "chatModelChoices", JSON.stringify(models), true);
-      Zotero.Prefs.set(this.PREF_PREFIX + "translationModelChoices", JSON.stringify(models), true);
-      let currentModel = String(this.getPref("chatModel") || "").trim();
-      if (!models.includes(currentModel)) {
-        currentModel = models.includes("gpt-5.6-sol") ? "gpt-5.6-sol" : this.pickDefaultChatModel(models);
-        Zotero.Prefs.set(this.PREF_PREFIX + "chatModel", currentModel, true);
-      }
-      let currentTranslationModel = String(this.getPref("translationModel") || "").trim();
-      if (!models.includes(currentTranslationModel)) {
-        let translationDefault = models.find((model) => /mini|nano|haiku|flash/i.test(String(model))) || models[0];
-        Zotero.Prefs.set(this.PREF_PREFIX + "translationModel", translationDefault, true);
-      }
+      this.storeSharedAIModels(models);
 
       if (connectionChanged) {
         await this.queueReaderConversationSave(state);
       }
-      state.statusMessage = "连接成功，已获取 " + models.length + " 个模型。";
+      state.statusMessage = "连接成功，阅读与翻译配置已同步（" + models.length + " 个模型）。";
       state.statusState = "success";
       if (state.connectionPanel) {
         state.connectionPanel.hidden = true;
@@ -6420,6 +6463,7 @@ var ZoteroAIReading = {
     pane.setAttribute("data-zai-reader-pane", "true");
     pane.setAttribute("data-zai-pane-mode", "translation");
     this.applyReaderTranslationPaneWidth(pane, this.getReaderTranslationPaneWidth());
+    this.enableReaderPanelFontZoom(pane, "translation");
     let detached = state?.detachedWindow === doc.defaultView;
 
     let header = makeHTML("div", "zai-reader-translation-header");
@@ -6515,7 +6559,11 @@ var ZoteroAIReading = {
     chat.addEventListener("click", () => this.addReaderSelectionToChat(state));
     let copy = makeHTML("button", "zai-reader-translation-action", "复制");
     copy.type = "button";
-    copy.addEventListener("click", () => state.resultText && this.copyToClipboard(state.resultText));
+    copy.addEventListener("click", () => {
+      if (state.resultText) {
+        this.copyReaderTextWithFeedback(copy, state.resultText);
+      }
+    });
     actions.appendChild(translate);
     actions.appendChild(chat);
     actions.appendChild(copy);
@@ -6572,7 +6620,9 @@ var ZoteroAIReading = {
       state.settingsPanel.hidden = !state.settingsExpanded;
       state.settingsPanel.setAttribute("aria-hidden", String(!state.settingsExpanded));
     }
-    state.sourceNode.textContent = state.sourceText || "在 PDF 中选择文字";
+    if (!this.isReaderPaneTextSelectionActive(state.sourceNode)) {
+      state.sourceNode.textContent = state.sourceText || "在 PDF 中选择文字";
+    }
     let outputText = state.resultText;
     if (!outputText) {
       if (state.statusState === "loading") {
@@ -6588,7 +6638,9 @@ var ZoteroAIReading = {
         outputText = "选择原文后显示译文";
       }
     }
-    state.outputNode.textContent = outputText;
+    if (!this.isReaderPaneTextSelectionActive(state.outputNode)) {
+      state.outputNode.textContent = outputText;
+    }
     state.pane.setAttribute("data-state", state.statusState || "idle");
     if (state.statusNode) {
       state.statusNode.textContent = state.statusMessage || "";
@@ -6613,9 +6665,198 @@ var ZoteroAIReading = {
     node.style.setProperty("-moz-user-select", "text", "important");
     node.style.setProperty("user-select", "text", "important");
     node.draggable = false;
+    this.ensureReaderPaneCopyBridge(node.ownerDocument);
     let keepSelectionInsidePane = (event) => event.stopPropagation();
     for (let type of ["pointerdown", "mousedown", "selectstart", "copy"]) {
-      node.addEventListener(type, keepSelectionInsidePane);
+      node.addEventListener(type, keepSelectionInsidePane, true);
+    }
+  },
+
+  clampReaderPanelFontSize(value) {
+    let size = Number(value);
+    if (!Number.isFinite(size)) {
+      size = 13;
+    }
+    return Math.max(11, Math.min(22, Math.round(size)));
+  },
+
+  getReaderPanelFontSize(kind) {
+    let pref = kind === "translation" ? "translationFontSize" : "chatFontSize";
+    return this.clampReaderPanelFontSize(this.getIntPref(pref));
+  },
+
+  applyReaderPanelFontSize(pane, size) {
+    if (!pane) {
+      return;
+    }
+    let value = this.clampReaderPanelFontSize(size);
+    pane.style.setProperty("--zai-reader-content-font-size", value + "px");
+    pane.setAttribute("data-zai-font-size", String(value));
+  },
+
+  setReaderPanelFontSize(kind, size, sourcePane = null) {
+    let value = this.clampReaderPanelFontSize(size);
+    let pref = kind === "translation" ? "translationFontSize" : "chatFontSize";
+    Zotero.Prefs.set(this.PREF_PREFIX + pref, value, true);
+    this.applyReaderPanelFontSize(sourcePane, value);
+    let states = kind === "translation" ? this.readerTranslationStates : this.readerChatStates;
+    for (let state of states.values()) {
+      this.applyReaderPanelFontSize(state?.pane, value);
+    }
+    return value;
+  },
+
+  showReaderPanelFontSizeIndicator(pane, size) {
+    if (!pane?.ownerDocument) {
+      return;
+    }
+    let indicator = pane.querySelector?.(".zai-reader-font-size-indicator");
+    if (!indicator) {
+      indicator = pane.ownerDocument.createElementNS(this.HTML_NS, "div");
+      indicator.className = "zai-reader-font-size-indicator";
+      pane.appendChild(indicator);
+    }
+    indicator.textContent = String(size) + " px";
+    indicator.hidden = false;
+    let win = pane.ownerDocument.defaultView;
+    if (pane._zaiReaderFontIndicatorTimer != null) {
+      win?.clearTimeout?.(pane._zaiReaderFontIndicatorTimer);
+    }
+    pane._zaiReaderFontIndicatorTimer = win?.setTimeout?.(() => {
+      if (indicator?.isConnected) {
+        indicator.hidden = true;
+      }
+      pane._zaiReaderFontIndicatorTimer = null;
+    }, 850);
+  },
+
+  enableReaderPanelFontZoom(pane, kind) {
+    if (!pane || pane._zaiReaderFontZoomHandler) {
+      return;
+    }
+    this.applyReaderPanelFontSize(pane, this.getReaderPanelFontSize(kind));
+    pane._zaiReaderFontWheelDelta = 0;
+    let wheel = (event) => {
+      if (!(event?.ctrlKey || event?.metaKey) || !Number(event?.deltaY)) {
+        return;
+      }
+      event.preventDefault?.();
+      event.stopImmediatePropagation?.();
+      event.stopPropagation?.();
+      pane._zaiReaderFontWheelDelta += Number(event.deltaY);
+      let threshold = Number(event.deltaMode) === 1 ? 1 : 36;
+      if (Math.abs(pane._zaiReaderFontWheelDelta) < threshold) {
+        return;
+      }
+      let direction = pane._zaiReaderFontWheelDelta < 0 ? 1 : -1;
+      pane._zaiReaderFontWheelDelta = 0;
+      let size = this.setReaderPanelFontSize(
+        kind,
+        this.getReaderPanelFontSize(kind) + direction,
+        pane
+      );
+      this.showReaderPanelFontSizeIndicator(pane, size);
+    };
+    pane.addEventListener("wheel", wheel, { capture: true, passive: false });
+    pane._zaiReaderFontZoomHandler = wheel;
+  },
+
+  getReaderPaneSelectionText(doc, container = null) {
+    try {
+      let selection = doc?.defaultView?.getSelection?.();
+      if (!selection || !selection.rangeCount || selection.isCollapsed) {
+        return "";
+      }
+      let parts = [];
+      for (let index = 0; index < selection.rangeCount; index++) {
+        let range = selection.getRangeAt(index);
+        let asElement = (node) => node?.nodeType === 1 ? node : node?.parentElement;
+        let roots = [range.commonAncestorContainer, range.startContainer, range.endContainer]
+          .map(asElement)
+          .filter(Boolean);
+        let selectable = roots.map((root) => root.closest?.("[data-zai-selectable-text]"))
+          .find((root) => root && (!container || root === container || container.contains?.(root)));
+        if (!selectable) {
+          continue;
+        }
+        let text = String(range.toString?.() || "");
+        if (text) {
+          parts.push(text);
+        }
+      }
+      return parts.join("\n");
+    }
+    catch (_) {
+      return "";
+    }
+  },
+
+  isReaderPaneTextSelectionActive(container) {
+    let doc = container?.ownerDocument || container;
+    return Boolean(this.getReaderPaneSelectionText(doc, container?.ownerDocument ? container : null));
+  },
+
+  ensureReaderPaneCopyBridge(doc) {
+    if (!doc || doc._zaiReaderPaneCopyBridge) {
+      return;
+    }
+    let copySelection = (event) => {
+      let selectedText = this.getReaderPaneSelectionText(doc);
+      if (!selectedText) {
+        return;
+      }
+      try {
+        event?.clipboardData?.setData?.("text/plain", selectedText);
+      }
+      catch (_) {}
+      try {
+        this.copyToClipboard(selectedText);
+      }
+      catch (error) {
+        this.log("reader pane copy failed: " + (error.stack || error.message || String(error)));
+        return;
+      }
+      event?.preventDefault?.();
+      event?.stopImmediatePropagation?.();
+      event?.stopPropagation?.();
+    };
+    let keyDown = (event) => {
+      if (!(event?.ctrlKey || event?.metaKey) || event?.altKey || String(event?.key || "").toLowerCase() !== "c") {
+        return;
+      }
+      copySelection(event);
+    };
+    doc.addEventListener("copy", copySelection, true);
+    doc.addEventListener("keydown", keyDown, true);
+    doc._zaiReaderPaneCopyBridge = { copySelection, keyDown };
+  },
+
+  copyReaderTextWithFeedback(button, text) {
+    let value = String(text || "");
+    if (!value) {
+      return false;
+    }
+    try {
+      this.copyToClipboard(value);
+      if (button) {
+        let original = button.getAttribute?.("data-zai-copy-label") || button.textContent || "复制";
+        button.setAttribute?.("data-zai-copy-label", original);
+        button.textContent = "✓";
+        button.setAttribute?.("data-copied", "true");
+        let win = button.ownerDocument?.defaultView;
+        win?.setTimeout?.(() => {
+          if (!button?.isConnected) {
+            return;
+          }
+          button.textContent = original;
+          button.removeAttribute?.("data-copied");
+        }, 1000);
+      }
+      return true;
+    }
+    catch (error) {
+      this.log("copy reader text failed: " + (error.stack || error.message || String(error)));
+      return false;
     }
   },
 
@@ -6631,12 +6872,7 @@ var ZoteroAIReading = {
       if (!models.length) {
         throw new Error("服务没有返回可用模型。");
       }
-      Zotero.Prefs.set(this.PREF_PREFIX + "translationModelChoices", JSON.stringify(models), true);
-      let currentTranslationModel = String(this.getPref("translationModel") || "").trim();
-      if (!models.includes(currentTranslationModel)) {
-        let translationDefault = models.find((model) => /mini|nano|haiku|flash/i.test(String(model))) || models[0];
-        Zotero.Prefs.set(this.PREF_PREFIX + "translationModel", translationDefault, true);
-      }
+      this.storeSharedAIModels(models);
       state.statusMessage = "已更新模型列表。";
       state.statusState = "success";
     }
@@ -6725,6 +6961,7 @@ var ZoteroAIReading = {
     pane.setAttribute("data-zai-pane-mode", "native-chat");
     pane.setAttribute("data-zai-chat-ui-version", "sessions-1");
     this.applyReaderPaneWidth(pane, this.getReaderPaneWidth());
+    this.enableReaderPanelFontZoom(pane, "chat");
     let detached = state?.detachedWindow === doc.defaultView;
 
     let header = makeHTML("div", "zai-reader-chat-header");
@@ -7323,8 +7560,34 @@ var ZoteroAIReading = {
       }
       bubble.appendChild(sources);
     }
+    this.appendReaderChatCopyButton(bubble, message);
     container.appendChild(bubble);
     return bubble;
+  },
+
+  appendReaderChatCopyButton(bubble, message) {
+    if (!bubble || message?.role !== "assistant" || !String(message?.text || "")) {
+      return null;
+    }
+    let doc = bubble.ownerDocument;
+    let button = doc.createElementNS(this.HTML_NS, "button");
+    button.className = "zai-reader-chat-message-copy";
+    button.type = "button";
+    button.textContent = "⧉";
+    button.title = "复制回答";
+    button.setAttribute("aria-label", "复制回答");
+    button.setAttribute("data-zai-copy-label", "⧉");
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.copyReaderTextWithFeedback(button, message.text);
+    });
+    bubble.appendChild(button);
+    return button;
   },
 
   appendReaderChatPlainTextMessage(container, message) {
@@ -7350,6 +7613,7 @@ var ZoteroAIReading = {
     }
     content.textContent = parts.join("\n\n");
     bubble.appendChild(content);
+    this.appendReaderChatCopyButton(bubble, message);
     container.appendChild(bubble);
     return bubble;
   },
@@ -7361,6 +7625,111 @@ var ZoteroAIReading = {
       .replace(/>/g, "&gt;")
       .replace(/\"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  },
+
+  getReaderChatMathEngine() {
+    try {
+      if (typeof katex !== "undefined" && typeof katex?.renderToString === "function") {
+        return katex;
+      }
+    }
+    catch (_) {}
+    try {
+      if (typeof globalThis !== "undefined" && typeof globalThis.katex?.renderToString === "function") {
+        return globalThis.katex;
+      }
+    }
+    catch (_) {}
+    return null;
+  },
+
+  renderReaderChatMathExpression(expression, displayMode = false, sourceText = "") {
+    let math = String(expression || "").trim();
+    let fallback = String(sourceText || (displayMode ? "\\[" + math + "\\]" : "\\(" + math + "\\)"));
+    if (!math) {
+      return this.escapeReaderChatHTML(fallback);
+    }
+    try {
+      let engine = this.getReaderChatMathEngine();
+      if (!engine) {
+        throw new Error("KaTeX is unavailable");
+      }
+      let rendered = engine.renderToString(math, {
+        displayMode: Boolean(displayMode),
+        output: "mathml",
+        throwOnError: true,
+        strict: "ignore",
+        trust: false,
+        maxExpand: 1000,
+        maxSize: 20
+      });
+      let className = "zai-reader-chat-math" + (displayMode ? " zai-reader-chat-math-display" : "");
+      return "<span class=\"" + className + "\">" + rendered + "</span>";
+    }
+    catch (_) {
+      return "<span class=\"zai-reader-chat-math-error\">" + this.escapeReaderChatHTML(fallback) + "</span>";
+    }
+  },
+
+  isEscapedReaderChatDelimiter(source, index) {
+    let backslashes = 0;
+    for (let cursor = Number(index) - 1; cursor >= 0 && source[cursor] === "\\"; cursor--) {
+      backslashes++;
+    }
+    return backslashes % 2 === 1;
+  },
+
+  replaceReaderChatMathDelimited(source, open, close, displayMode, protect, options = {}) {
+    let value = String(source || "");
+    let output = "";
+    let cursor = 0;
+    let singleDollar = open === "$" && close === "$";
+    while (cursor < value.length) {
+      let start = value.indexOf(open, cursor);
+      if (start === -1) {
+        output += value.slice(cursor);
+        break;
+      }
+      let invalidOpen = this.isEscapedReaderChatDelimiter(value, start) ||
+        (singleDollar && (value[start - 1] === "$" || value[start + 1] === "$"));
+      if (invalidOpen) {
+        output += value.slice(cursor, start + open.length);
+        cursor = start + open.length;
+        continue;
+      }
+      let end = start + open.length;
+      while (end < value.length) {
+        end = value.indexOf(close, end);
+        if (end === -1) {
+          break;
+        }
+        let invalidClose = this.isEscapedReaderChatDelimiter(value, end) ||
+          (singleDollar && (value[end - 1] === "$" || value[end + 1] === "$"));
+        if (!invalidClose) {
+          break;
+        }
+        end += close.length;
+      }
+      if (end === -1) {
+        output += value.slice(cursor);
+        break;
+      }
+      let expression = value.slice(start + open.length, end);
+      let invalidExpression = !expression.trim() ||
+        (options.singleLine && /\n/.test(expression)) ||
+        (singleDollar && /^\s*\d+(?:[.,]\d+)?\s*$/.test(expression));
+      if (invalidExpression) {
+        output += value.slice(cursor, start + open.length);
+        cursor = start + open.length;
+        continue;
+      }
+      let raw = value.slice(start, end + close.length);
+      output += value.slice(cursor, start) + protect(
+        this.renderReaderChatMathExpression(expression, displayMode, raw)
+      );
+      cursor = end + close.length;
+    }
+    return output;
   },
 
   renderReaderChatMarkdownInline(value) {
@@ -7389,6 +7758,11 @@ var ZoteroAIReading = {
         "</a>"
       )
     );
+
+    source = this.replaceReaderChatMathDelimited(source, "\\[", "\\]", true, protect);
+    source = this.replaceReaderChatMathDelimited(source, "$$", "$$", true, protect);
+    source = this.replaceReaderChatMathDelimited(source, "\\(", "\\)", false, protect, { singleLine: true });
+    source = this.replaceReaderChatMathDelimited(source, "$", "$", false, protect, { singleLine: true });
 
     let html = this.escapeReaderChatHTML(source)
       .replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>")
@@ -10485,7 +10859,7 @@ var ZoteroAIReading = {
         ".zai-reader-translation-settings-field select{flex:1;min-width:0;}",
         ".zai-reader-translation-settings-actions{display:flex;justify-content:flex-end;gap:4px;padding-top:2px;border-top:1px solid var(--fill-quarternary,rgba(128,128,128,.22));}",
         ".zai-reader-translation-label{padding:13px 12px 4px;color:var(--fill-secondary,#68727d);font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;}",
-        ".zai-reader-translation-source,.zai-reader-translation-output{margin:0 10px;padding:9px 10px;border:1px solid var(--fill-quarternary,rgba(128,128,128,.28));border-radius:5px;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere;font-size:13px;line-height:1.55;cursor:text;-moz-user-select:text!important;user-select:text!important;}",
+        ".zai-reader-translation-source,.zai-reader-translation-output{margin:0 10px;padding:9px 10px;border:1px solid var(--fill-quarternary,rgba(128,128,128,.28));border-radius:5px;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere;font-size:var(--zai-reader-content-font-size,13px);line-height:1.55;cursor:text;-moz-user-select:text!important;user-select:text!important;}",
         ".zai-reader-translation-source{max-height:190px;background:rgba(196,82,45,.06);color:var(--fill-secondary,#59636d);}",
         ".zai-reader-translation-output{flex:1 1 auto;min-height:100px;background:var(--material-sidepane,#fff);}",
         ".zai-reader-translation-pane[data-state='loading'] .zai-reader-translation-output{color:var(--fill-secondary,#68727d);}",
@@ -10540,16 +10914,18 @@ var ZoteroAIReading = {
         ".zai-reader-chat-context-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
         ".zai-reader-chat-context .zai-reader-chat-icon{width:22px;height:22px;min-width:22px;font-size:14px;}",
         ".zai-reader-chat-messages{display:flex;flex:1 1 auto;flex-direction:column;gap:10px;min-width:0;min-height:0;padding:14px 12px;overflow:auto;overflow-anchor:none;scrollbar-gutter:stable;}",
-        ".zai-reader-chat-empty{display:flex;align-items:center;justify-content:center;min-height:100%;color:var(--fill-secondary,#68727d);font-size:13px;}",
-        ".zai-reader-chat-message{box-sizing:border-box;max-width:92%;padding:9px 10px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;cursor:text;-moz-user-select:text!important;user-select:text!important;}",
+        ".zai-reader-chat-empty{display:flex;align-items:center;justify-content:center;min-height:100%;color:var(--fill-secondary,#68727d);font-size:var(--zai-reader-content-font-size,13px);}",
+        ".zai-reader-chat-message{box-sizing:border-box;position:relative;max-width:92%;padding:9px 10px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--zai-reader-content-font-size,13px);line-height:1.55;cursor:text;-moz-user-select:text!important;user-select:text!important;}",
         ".zai-reader-chat-message-user{align-self:flex-end;background:rgba(20,122,108,.13);border:1px solid rgba(20,122,108,.24);color:var(--fill-primary,#15201f);}",
-        ".zai-reader-chat-message-assistant{align-self:flex-start;background:var(--material-sidepane,#fff);border:1px solid var(--fill-quarternary,rgba(128,128,128,.27));border-left:3px solid #147a6c;}",
+        ".zai-reader-chat-message-assistant{align-self:flex-start;padding-right:34px;background:var(--material-sidepane,#fff);border:1px solid var(--fill-quarternary,rgba(128,128,128,.27));border-left:3px solid #147a6c;}",
         ".zai-reader-chat-message-error{border-left-color:#b42318!important;background:rgba(180,35,24,.055);}",
+        ".zai-reader-chat-message-copy{display:inline-flex;position:absolute;top:5px;right:5px;align-items:center;justify-content:center;box-sizing:border-box;width:24px;height:24px;padding:0;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--fill-secondary,#68727d);font:inherit;font-size:15px;line-height:1;cursor:pointer;opacity:.62;-moz-user-select:none!important;user-select:none!important;}",
+        ".zai-reader-chat-message-copy:hover,.zai-reader-chat-message-copy[data-copied='true']{border-color:var(--fill-quarternary,rgba(128,128,128,.32));background:var(--fill-quinary,rgba(128,128,128,.11));color:#147a6c;opacity:1;}",
         ".zai-reader-chat-pending{color:var(--fill-secondary,#66717c);font-style:italic;}",
         ".zai-reader-chat-message-content,.zai-reader-chat-reasoning-content{-moz-user-select:text!important;user-select:text!important;}",
         ".zai-reader-chat-reasoning-summary{margin:0 0 8px;padding:0 0 7px;border-bottom:1px solid var(--fill-quarternary,rgba(128,128,128,.22));color:var(--fill-secondary,#59636d);font-size:11px;}",
         ".zai-reader-chat-reasoning-summary summary{cursor:pointer;font-weight:700;-moz-user-select:none;user-select:none;}",
-        ".zai-reader-chat-reasoning-content{margin-top:6px;font-size:11px;line-height:1.5;}",
+        ".zai-reader-chat-reasoning-content{margin-top:6px;font-size:.86em;line-height:1.5;}",
         ".zai-reader-chat-markdown{white-space:normal;overflow-wrap:anywhere;}",
         ".zai-reader-chat-markdown-fallback{white-space:pre-wrap!important;overflow-wrap:anywhere;}",
         ".zai-reader-chat-markdown>:first-child{margin-top:0!important;}",
@@ -10568,6 +10944,11 @@ var ZoteroAIReading = {
         ".zai-reader-chat-markdown th{background:var(--fill-quinary,rgba(128,128,128,.10));font-weight:700;}",
         ".zai-reader-chat-markdown a{color:#147a6c;text-decoration:underline;cursor:pointer;}",
         ".zai-reader-chat-markdown hr{height:0;margin:10px 0;border:0;border-top:1px solid var(--fill-quarternary,rgba(128,128,128,.32));}",
+        ".zai-reader-chat-math{display:inline-block;max-width:100%;vertical-align:-.12em;white-space:nowrap;-moz-user-select:text!important;user-select:text!important;}",
+        ".zai-reader-chat-math-display{display:block;margin:8px 0;padding:3px 0;overflow-x:auto;overflow-y:hidden;text-align:center;vertical-align:baseline;}",
+        ".zai-reader-chat-math math{font-size:1.04em;}",
+        ".zai-reader-chat-math-display math{margin:0 auto;}",
+        ".zai-reader-chat-math-error{color:#9b3e23;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;white-space:pre-wrap;}",
         ".zai-reader-chat-message-context{margin:0 0 7px;padding:0 0 6px;border-bottom:1px solid rgba(196,82,45,.30);color:#9b3e23;font-size:11px;line-height:1.4;}",
         ".zai-reader-chat-sources{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px;padding-top:7px;border-top:1px solid var(--fill-quarternary,rgba(128,128,128,.22));}",
         ".zai-reader-chat-sources a{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#147a6c;font-size:11px;text-decoration:none;}",
@@ -10575,12 +10956,14 @@ var ZoteroAIReading = {
         ".zai-reader-chat-footer{flex:0 0 auto;padding:9px 10px 8px;border-top:1px solid var(--fill-quarternary,rgba(128,128,128,.25));background:var(--material-sidepane,#fff);}",
         ".zai-reader-chat-composer{display:flex;align-items:flex-end;gap:7px;padding:5px;border:1px solid var(--fill-quarternary,rgba(128,128,128,.36));border-radius:6px;background:var(--material-sidepane,#fff);}",
         ".zai-reader-chat-composer:focus-within{border-color:#147a6c;box-shadow:0 0 0 2px rgba(20,122,108,.12);}",
-        ".zai-reader-chat-input{display:block;box-sizing:border-box;flex:1;min-width:0;max-height:160px;resize:vertical;padding:4px;border:0;outline:0;background:transparent;color:inherit;font:inherit;font-size:13px;line-height:1.45;}",
+        ".zai-reader-chat-input{display:block;box-sizing:border-box;flex:1;min-width:0;max-height:160px;resize:vertical;padding:4px;border:0;outline:0;background:transparent;color:inherit;font:inherit;font-size:var(--zai-reader-content-font-size,13px);line-height:1.45;}",
         ".zai-reader-chat-send{border-color:#147a6c;background:#147a6c;color:#fff;}",
         ".zai-reader-chat-send:hover{border-color:#0d5f55;background:#0d5f55;}",
         ".zai-reader-chat-status{min-height:17px;padding:4px 1px 0;color:var(--fill-secondary,#68727d);font-size:11px;line-height:1.35;}",
         ".zai-reader-chat-status[data-state='error']{color:#b42318;}",
         ".zai-reader-chat-status[data-state='success']{color:#147a6c;}",
+        ".zai-reader-font-size-indicator{position:absolute;top:54px;left:50%;z-index:90;transform:translateX(-50%);padding:4px 8px;border:1px solid rgba(20,122,108,.36);border-radius:4px;background:rgba(255,255,255,.96);color:#147a6c;font-size:11px;font-weight:700;line-height:1;box-shadow:0 3px 12px rgba(0,0,0,.14);pointer-events:none;-moz-user-select:none;user-select:none;}",
+        ".zai-reader-font-size-indicator[hidden]{display:none!important;}",
         ".zai-reader-alphaxiv-question-popover{display:flex;position:absolute;z-index:40;box-sizing:border-box;width:min(390px,calc(100% - 16px));max-width:calc(100% - 16px);flex-direction:column;gap:7px;padding:10px;border:1px solid rgba(211,75,56,.45);border-radius:6px;background:rgba(255,255,255,.98);box-shadow:0 8px 26px rgba(0,0,0,.18);color:#26322f;}",
         ".zai-reader-alphaxiv-question-popover[hidden]{display:none!important;}",
         ".zai-reader-alphaxiv-question-heading{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px;}",
@@ -15602,10 +15985,20 @@ var ZoteroAIReading = {
       throw new Error("请先在插件设置中填写翻译 API 密钥。");
     }
 
+    let model = String(this.getPref("translationModel") || "").trim();
+    if (!model) {
+      model = this.pickDefaultTranslationModel(
+        [...this.getStoredTranslationModels(), ...this.getStoredChatModels()],
+        String(this.getPref("chatModel") || "").trim()
+      );
+      if (model) {
+        Zotero.Prefs.set(this.PREF_PREFIX + "translationModel", model, true);
+      }
+    }
     let config = {
       apiKey,
       baseURL: this.getTranslationAPIBaseURL(),
-      model: String(this.getPref("translationModel") || "").trim()
+      model
     };
     if (requireModel && !config.model) {
       throw new Error("请先选择或输入一个翻译模型。");
@@ -16207,7 +16600,10 @@ var ZoteroAIReading = {
     if (!select) {
       return;
     }
-    let current = String(this.getPref("translationModel") || "").trim();
+    let current = String(this.getPref("translationModel") || "").trim() || this.pickDefaultTranslationModel(
+      this.getStoredTranslationModels(),
+      String(this.getPref("chatModel") || "").trim()
+    );
     let models = Array.from(new Set([current, ...this.getStoredTranslationModels()].filter(Boolean)));
     while (select.firstChild) {
       select.firstChild.remove();
@@ -16228,39 +16624,80 @@ var ZoteroAIReading = {
   },
 
   populateTranslationModelChoices(doc, models = null) {
-    let list = doc?.getElementById?.("zai-translation-models");
+    let current = String(this.getPref("translationModel") || "").trim();
     let choices = Array.isArray(models) ? models : this.getStoredTranslationModels();
-    if (!list) {
-      return choices;
-    }
-    while (list.firstChild) {
-      list.firstChild.remove();
-    }
-    for (let model of choices) {
-      let option = doc.createElementNS(this.HTML_NS, "option");
-      option.value = model;
-      list.appendChild(option);
-    }
-    return choices;
+    return this.populatePreferenceModelSelect(doc, "zai-translation-model", current, choices);
   },
 
   populateChatModelChoices(doc, models = null) {
-    let list = doc?.getElementById?.("zai-chat-models");
+    let current = String(this.getPref("chatModel") || "").trim();
     let choices = Array.isArray(models)
       ? models
       : Array.from(new Set([...this.getStoredChatModels(), ...this.getStoredTranslationModels()]));
-    if (!list) {
+    return this.populatePreferenceModelSelect(doc, "zai-chat-model", current, choices);
+  },
+
+  populatePreferenceModelSelect(doc, selectID, currentModel, models) {
+    let current = String(currentModel || "").trim();
+    let choices = Array.from(new Set(
+      (models || []).map((model) => String(model || "").trim()).filter(Boolean)
+    ));
+    if (current && !choices.includes(current)) {
+      choices.unshift(current);
+    }
+    let select = doc?.getElementById?.(selectID);
+    if (!select) {
       return choices;
     }
-    while (list.firstChild) {
-      list.firstChild.remove();
+    while (select.firstChild) {
+      select.firstChild.remove();
+    }
+    if (!choices.length) {
+      let option = doc.createElementNS(this.HTML_NS, "option");
+      option.value = "";
+      option.textContent = "Fetch models to choose";
+      select.appendChild(option);
+      select.value = "";
+      return choices;
     }
     for (let model of choices) {
       let option = doc.createElementNS(this.HTML_NS, "option");
       option.value = model;
-      list.appendChild(option);
+      option.textContent = model;
+      select.appendChild(option);
     }
+    select.value = current || choices[0];
+    select.setAttribute("value", select.value);
     return choices;
+  },
+
+  setPreferenceModel(kind, model, doc = null) {
+    let value = String(model || "").trim();
+    if (!value || (kind !== "chat" && kind !== "translation")) {
+      return false;
+    }
+    let prefName = kind === "chat" ? "chatModel" : "translationModel";
+    Zotero.Prefs.set(this.PREF_PREFIX + prefName, value, true);
+
+    if (kind === "chat") {
+      this.populateChatModelChoices(doc);
+      for (let state of this.readerChatStates.values()) {
+        this.populateReaderChatModelSelect(state?.modelSelect);
+        if (state?.reasoningSelect) {
+          this.populateReasoningSelect(state.reasoningSelect, "chat", value);
+        }
+      }
+    }
+    else {
+      this.populateTranslationModelChoices(doc);
+      for (let state of this.readerTranslationStates.values()) {
+        this.populateReaderTranslationModelSelect(state?.modelSelect);
+        if (state?.reasoningSelect) {
+          this.populateReasoningSelect(state.reasoningSelect, "translation", value);
+        }
+      }
+    }
+    return true;
   },
 
   setTranslationPreferenceStatus(doc, message, state = "") {
@@ -16272,45 +16709,72 @@ var ZoteroAIReading = {
     node.setAttribute("data-state", state || "");
   },
 
-  async refreshTranslationModels(doc) {
+  getAIServicePreferenceInputs(doc) {
+    return {
+      rawURL: String(doc?.getElementById?.("zai-api-url")?.value || "").trim(),
+      apiKey: String(doc?.getElementById?.("zai-api-key")?.value || "").trim()
+    };
+  },
+
+  persistAIServicePreferenceInputs(doc, requireComplete = false) {
+    let { rawURL, apiKey } = this.getAIServicePreferenceInputs(doc);
+    if (requireComplete && (!rawURL || !apiKey)) {
+      throw new Error("请同时填写 AI 服务 URL 和 API Key。");
+    }
+    if (!rawURL && !apiKey) {
+      return false;
+    }
+    if (rawURL) {
+      this.normalizeAIServiceBaseURL(rawURL);
+    }
+    Zotero.Prefs.set(this.PREF_PREFIX + "translationAPIURL", rawURL, true);
+    Zotero.Prefs.set(this.PREF_PREFIX + "translationAPIKey", apiKey, true);
+    return true;
+  },
+
+  scheduleSharedAIConnectionInitialization(doc) {
+    let win = doc?.defaultView;
+    if (!win?.setTimeout) {
+      return;
+    }
+    if (this._sharedAIConnectionTimer != null) {
+      try {
+        win.clearTimeout(this._sharedAIConnectionTimer);
+      }
+      catch (_) {}
+    }
+    this._sharedAIConnectionTimer = win.setTimeout(() => {
+      this._sharedAIConnectionTimer = null;
+      let { rawURL, apiKey } = this.getAIServicePreferenceInputs(doc);
+      if (!rawURL || !apiKey) {
+        this.setTranslationPreferenceStatus(doc, "填写 URL 和 Key 后会自动同步阅读与翻译配置。");
+        return;
+      }
+      this.refreshTranslationModels(doc, { persistInputs: true });
+    }, 550);
+  },
+
+  async refreshTranslationModels(doc, options = {}) {
     let button = doc?.getElementById?.("zai-refresh-translation-models");
     try {
       if (button) {
         button.disabled = true;
         button.setAttribute("label", "获取中...");
       }
+      if (options.persistInputs !== false && doc?.getElementById?.("zai-api-url")) {
+        this.persistAIServicePreferenceInputs(doc, true);
+      }
       this.setTranslationPreferenceStatus(doc, "正在获取模型列表...");
       let models = await this.fetchTranslationModels();
       if (!models.length) {
         throw new Error("服务没有返回可用模型。");
       }
-      Zotero.Prefs.set(this.PREF_PREFIX + "translationModelChoices", JSON.stringify(models), true);
-      Zotero.Prefs.set(this.PREF_PREFIX + "chatModelChoices", JSON.stringify(models), true);
-      this.populateTranslationModelChoices(doc, models);
-      this.populateChatModelChoices(doc, models);
-
-      let chatModel = String(this.getPref("chatModel") || "").trim();
-      if (!chatModel) {
-        chatModel = this.pickDefaultChatModel(models);
-        Zotero.Prefs.set(this.PREF_PREFIX + "chatModel", chatModel, true);
-        let chatInput = doc?.getElementById?.("zai-chat-model");
-        if (chatInput) {
-          chatInput.value = chatModel;
-          chatInput.setAttribute("value", chatModel);
-        }
-      }
-
-      let currentModel = String(this.getPref("translationModel") || "").trim();
-      if (!currentModel) {
-        currentModel = models.includes("gpt-5.4-mini") ? "gpt-5.4-mini" : models[0];
-        Zotero.Prefs.set(this.PREF_PREFIX + "translationModel", currentModel, true);
-        let input = doc?.getElementById?.("zai-translation-model");
-        if (input) {
-          input.value = currentModel;
-          input.setAttribute("value", currentModel);
-        }
-      }
-      this.setTranslationPreferenceStatus(doc, "已获取 " + models.length + " 个模型。", "success");
+      let stored = this.storeSharedAIModels(models, doc);
+      this.setTranslationPreferenceStatus(
+        doc,
+        "已同步阅读与翻译配置（翻译模型：" + stored.translationModel + "）。",
+        "success"
+      );
     }
     catch (error) {
       this.setTranslationPreferenceStatus(doc, error?.message || "获取模型列表失败。", "error");

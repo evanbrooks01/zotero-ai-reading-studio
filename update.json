@@ -3,9 +3,9 @@
     "zoteroaireading-translate@codex.local": {
       "updates": [
         {
-          "version": "0.7.20",
-          "update_link": "https://github.com/Shanfu2021/zotero-ai-reading-studio/releases/download/v0.7.20/zotero-ai-reading-0.7.20.xpi",
-          "update_hash": "sha256:4f3ff502caf0c945ca0875feecddf29740a0203a11ff5bdb7c377ef343413d2d",
+          "version": "0.7.21",
+          "update_link": "https://github.com/Shanfu2021/zotero-ai-reading-studio/releases/download/v0.7.21/zotero-ai-reading-0.7.21.xpi",
+          "update_hash": "sha256:93a6c2f9f603d77a534b50ccc9121ef9cc108a968973b4ac2b24e587b9059fc6",
           "applications": {
             "zotero": {
               "strict_min_version": "7.0",

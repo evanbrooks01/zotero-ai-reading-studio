@@ -6,6 +6,8 @@ pref("extensions.zotero-ai-reading.openAIPage", false);
 pref("extensions.zotero-ai-reading.openInReaderPane", true);
 pref("extensions.zotero-ai-reading.readerPaneWidth", 520);
 pref("extensions.zotero-ai-reading.translationPaneWidth", 340);
+pref("extensions.zotero-ai-reading.chatFontSize", 13);
+pref("extensions.zotero-ai-reading.translationFontSize", 13);
 pref("extensions.zotero-ai-reading.alphaXivPaneWidth", 520);
 pref("extensions.zotero-ai-reading.alphaXivLanguage", "zh");
 pref("extensions.zotero-ai-reading.alphaXivMode", "paper");

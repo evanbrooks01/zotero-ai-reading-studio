@@ -5,8 +5,11 @@ const vm = require("vm");
 
 const root = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "zotero-ai-reading.js"), "utf8");
+const preferencesSource = fs.readFileSync(path.join(root, "preferences.xhtml"), "utf8");
+const katexSource = fs.readFileSync(path.join(root, "vendor", "katex", "katex.min.js"), "utf8");
 const context = { Map, Set, URL, btoa, atob };
 vm.createContext(context);
+vm.runInContext(katexSource, context, { filename: "vendor/katex/katex.min.js" });
 vm.runInContext(source, context, { filename: "zotero-ai-reading.js" });
 
 const sut = context.ZoteroAIReading;
@@ -66,6 +69,26 @@ function verifyStreamingMarkdownFallback() {
   }
   assert.strictEqual(container.textContent, "still visible");
   assert.ok(classes.has("zai-reader-chat-markdown-fallback"));
+}
+
+function verifyMathRendering() {
+  const markdown = [
+    "Inline values \\(P\\) and $G$ remain in the sentence.",
+    "",
+    "\\[ \\text{Score} = 1-\\frac{\\operatorname{Levenshtein}(P,G)}{\\max(|P|,|G|)} \\]",
+    "",
+    "$$ S_{\\text{final}} = \\frac{1}{N}\\sum_{i=1}^{N}S_{\\text{page},i} $$",
+    "",
+    "`\\(not rendered inside code\\)` and $12 remain literal."
+  ].join("\n");
+  const html = sut.readerChatMarkdownToHTML(markdown);
+  assert.match(html, /class="zai-reader-chat-math"/);
+  assert.match(html, /class="zai-reader-chat-math zai-reader-chat-math-display"/);
+  assert.match(html, /<math[^>]*>/);
+  assert.match(html, /<mfrac>/);
+  assert.match(html, /<code>\\\(not rendered inside code\\\)<\/code>/);
+  assert.match(html, /\$12 remain literal/);
+  assert.doesNotMatch(html, />\\\[ \\text\{Score\}/);
 }
 
 function verifyConversationStatePersistence() {
@@ -139,6 +162,8 @@ function verifySSEParsing() {
 function verifyDefaultModelPreference() {
   assert.strictEqual(sut.DEFAULTS.chatModel, "gpt-5.6-sol");
   assert.strictEqual(sut.pickDefaultChatModel(["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"]), "gpt-5.6-sol");
+  assert.strictEqual(sut.pickDefaultTranslationModel(["gpt-5.6-sol", "gpt-5.6-luna"]), "gpt-5.6-luna");
+  assert.strictEqual(sut.pickDefaultTranslationModel(["gpt-5.6-sol"], "fallback"), "gpt-5.6-sol");
 }
 
 function verifyServiceURLNormalization() {
@@ -164,6 +189,196 @@ function verifyReaderOutputIsSelectable() {
   assert.match(source, /user-select:text!important/);
   assert.match(source, /replaceChildren\(nextMessages\)/);
   assert.match(source, /renderReaderChatStreamFrame/);
+  assert.match(source, /ensureReaderPaneCopyBridge/);
+  assert.match(source, /zai-reader-chat-message-copy/);
+}
+
+function verifyReaderPaneCopyBridge() {
+  const selectable = {};
+  const element = {
+    nodeType: 1,
+    closest(selector) {
+      return selector === "[data-zai-selectable-text]" ? selectable : null;
+    }
+  };
+  const listeners = {};
+  const doc = {
+    defaultView: {
+      getSelection() {
+        return {
+          rangeCount: 1,
+          isCollapsed: false,
+          getRangeAt() {
+            return {
+              commonAncestorContainer: element,
+              startContainer: element,
+              endContainer: element,
+              toString() { return "selectable answer"; }
+            };
+          }
+        };
+      }
+    },
+    addEventListener(type, listener) { listeners[type] = listener; }
+  };
+  let clipboard = "";
+  const originalCopy = sut.copyToClipboard;
+  sut.copyToClipboard = (value) => { clipboard = value; };
+  try {
+    sut.ensureReaderPaneCopyBridge(doc);
+    let prevented = false;
+    listeners.copy({
+      clipboardData: { setData(_type, value) { clipboard = value; } },
+      preventDefault() { prevented = true; },
+      stopImmediatePropagation() {},
+      stopPropagation() {}
+    });
+    assert.strictEqual(clipboard, "selectable answer");
+    assert.strictEqual(prevented, true);
+  }
+  finally {
+    sut.copyToClipboard = originalCopy;
+  }
+}
+
+function verifyTranslationUsesSharedConnectionFallback() {
+  const prefs = new Map([
+    [sut.PREF_PREFIX + "translationAPIURL", "https://api.example.com"],
+    [sut.PREF_PREFIX + "translationAPIKey", "test-key"],
+    [sut.PREF_PREFIX + "chatModel", "gpt-5.6-sol"],
+    [sut.PREF_PREFIX + "chatModelChoices", "[]"],
+    [sut.PREF_PREFIX + "translationModel", ""],
+    [sut.PREF_PREFIX + "translationModelChoices", "[]"]
+  ]);
+  const originalZotero = context.Zotero;
+  context.Zotero = {
+    Prefs: {
+      get(name) { return prefs.get(name); },
+      set(name, value) { prefs.set(name, value); }
+    }
+  };
+  try {
+    const config = sut.getTranslationConnectionConfig(true);
+    assert.strictEqual(config.baseURL, "https://api.example.com/v1");
+    assert.strictEqual(config.apiKey, "test-key");
+    assert.strictEqual(config.model, "gpt-5.6-sol");
+    assert.strictEqual(prefs.get(sut.PREF_PREFIX + "translationModel"), "gpt-5.6-sol");
+  }
+  finally {
+    context.Zotero = originalZotero;
+  }
+}
+
+function verifyReaderPanelFontZoom() {
+  const prefs = new Map([
+    [sut.PREF_PREFIX + "chatFontSize", 13]
+  ]);
+  const originalZotero = context.Zotero;
+  context.Zotero = {
+    Prefs: {
+      get(name) { return prefs.get(name); },
+      set(name, value) { prefs.set(name, value); }
+    }
+  };
+  let indicator = null;
+  const listeners = {};
+  const styles = new Map();
+  const pane = {
+    ownerDocument: {
+      defaultView: {
+        setTimeout() { return 1; },
+        clearTimeout() {}
+      },
+      createElementNS() {
+        return { hidden: true, isConnected: true, className: "", textContent: "" };
+      }
+    },
+    style: { setProperty(name, value) { styles.set(name, value); } },
+    setAttribute(name, value) { this[name] = String(value); },
+    addEventListener(type, listener) { listeners[type] = listener; },
+    querySelector() { return indicator; },
+    appendChild(node) { indicator = node; return node; }
+  };
+  let prevented = false;
+  try {
+    sut.enableReaderPanelFontZoom(pane, "chat");
+    listeners.wheel({
+      ctrlKey: true,
+      deltaY: -100,
+      deltaMode: 0,
+      preventDefault() { prevented = true; },
+      stopImmediatePropagation() {},
+      stopPropagation() {}
+    });
+    assert.strictEqual(prevented, true);
+    assert.strictEqual(prefs.get(sut.PREF_PREFIX + "chatFontSize"), 14);
+    assert.strictEqual(styles.get("--zai-reader-content-font-size"), "14px");
+    assert.strictEqual(indicator.textContent, "14 px");
+  }
+  finally {
+    context.Zotero = originalZotero;
+  }
+}
+
+function verifyPreferenceModelDropdowns() {
+  assert.match(preferencesSource, /<html:select id="zai-chat-model"/);
+  assert.match(preferencesSource, /<html:select id="zai-translation-model"/);
+  assert.doesNotMatch(preferencesSource, /<html:datalist/);
+
+  const prefs = new Map([
+    [sut.PREF_PREFIX + "chatModel", "gpt-5.6-sol"],
+    [sut.PREF_PREFIX + "chatModelChoices", JSON.stringify(["gpt-5.6-sol", "gpt-5.6-luna"])],
+    [sut.PREF_PREFIX + "translationModel", "gpt-5.6-luna"],
+    [sut.PREF_PREFIX + "translationModelChoices", JSON.stringify(["gpt-5.6-sol", "gpt-5.6-luna"])]
+  ]);
+  const originalZotero = context.Zotero;
+  context.Zotero = {
+    Prefs: {
+      get(name) { return prefs.get(name); },
+      set(name, value) { prefs.set(name, value); }
+    }
+  };
+  const makeSelect = () => ({
+    children: [],
+    value: "",
+    get firstChild() { return this.children[0] || null; },
+    appendChild(node) {
+      node.remove = () => {
+        const index = this.children.indexOf(node);
+        if (index >= 0) this.children.splice(index, 1);
+      };
+      this.children.push(node);
+      return node;
+    },
+    setAttribute(name, value) { this[name] = String(value); }
+  });
+  const chatSelect = makeSelect();
+  const translationSelect = makeSelect();
+  const doc = {
+    getElementById(id) {
+      if (id === "zai-chat-model") return chatSelect;
+      if (id === "zai-translation-model") return translationSelect;
+      return null;
+    },
+    createElementNS() { return { value: "", textContent: "" }; }
+  };
+  try {
+    sut.populateChatModelChoices(doc);
+    sut.populateTranslationModelChoices(doc);
+    assert.deepStrictEqual(chatSelect.children.map((option) => option.textContent), ["gpt-5.6-sol", "gpt-5.6-luna"]);
+    assert.deepStrictEqual(translationSelect.children.map((option) => option.textContent), ["gpt-5.6-sol", "gpt-5.6-luna"]);
+    assert.strictEqual(chatSelect.value, "gpt-5.6-sol");
+    assert.strictEqual(translationSelect.value, "gpt-5.6-luna");
+
+    assert.strictEqual(sut.setPreferenceModel("chat", "gpt-5.6-luna", doc), true);
+    assert.strictEqual(prefs.get(sut.PREF_PREFIX + "chatModel"), "gpt-5.6-luna");
+    assert.strictEqual(prefs.get(sut.PREF_PREFIX + "translationModel"), "gpt-5.6-luna");
+    assert.strictEqual(sut.setPreferenceModel("translation", "gpt-5.6-sol", doc), true);
+    assert.strictEqual(prefs.get(sut.PREF_PREFIX + "translationModel"), "gpt-5.6-sol");
+  }
+  finally {
+    context.Zotero = originalZotero;
+  }
 }
 
 function verifyBufferedResponsesEventsAreHandled() {
@@ -208,12 +423,17 @@ function verifyHiddenContextDoesNotReserveSpace() {
 
 verifyMarkdownRendering();
 verifyStreamingMarkdownFallback();
+verifyMathRendering();
 verifyConversationStatePersistence();
 verifyPDFIsAddedOnlyToCurrentTurn();
 verifySSEParsing();
 verifyDefaultModelPreference();
 verifyServiceURLNormalization();
 verifyReaderOutputIsSelectable();
+verifyReaderPaneCopyBridge();
+verifyTranslationUsesSharedConnectionFallback();
+verifyReaderPanelFontZoom();
+verifyPreferenceModelDropdowns();
 verifyBufferedResponsesEventsAreHandled();
 verifyHiddenContextDoesNotReserveSpace();
 verifySessionHelpers();

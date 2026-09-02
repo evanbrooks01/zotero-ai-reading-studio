@@ -17,6 +17,9 @@ zip -X -r "$XPI_PATH" \
   zotero-ai-reading.js \
   floating-window.xhtml \
   preferences.xhtml \
-  icons/icon.png
+  icons/icon.png \
+  vendor/katex/katex.min.js \
+  vendor/katex/LICENSE \
+  vendor/katex/README.md
 
 printf '%s\n' "$XPI_PATH"
