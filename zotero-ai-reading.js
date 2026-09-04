@@ -906,34 +906,14 @@ var ZoteroAIReading = {
       this.injectReaderPaneStyle(doc);
       this.scheduleReaderSelectionTranslationInjection(reader);
 
-      let buttons = [];
-      let existingButton = doc.getElementById(this.READER_BUTTON_ID);
-      let existingTranslationButton = doc.getElementById(this.READER_TRANSLATION_BUTTON_ID);
-      let existingAlphaXivButton = doc.getElementById(this.READER_ALPHAXIV_BUTTON_ID);
-      if (existingButton) {
-        buttons.push(existingButton);
-      }
-      else {
-        buttons.push(this.createReaderToolbarButton(doc, reader));
-      }
-      if (existingTranslationButton) {
-        buttons.push(existingTranslationButton);
-      }
-      else {
-        buttons.push(this.createReaderTranslationToolbarButton(doc, reader));
-      }
-      if (existingAlphaXivButton) {
-        buttons.push(existingAlphaXivButton);
-      }
-      else {
-        buttons.push(this.createReaderAlphaXivToolbarButton(doc, reader));
-      }
+      let buttons = this.getReaderToolbarButtonsInVisualOrder(doc, reader);
       if (typeof event?.append === "function") {
         for (let button of buttons) {
           if (!button.isConnected) {
             event.append(button);
           }
         }
+        this.enforceReaderToolbarButtonOrder(buttons);
         this.attachReaderToolbarButtonClickBridge(reader, buttons);
         return;
       }
@@ -945,6 +925,7 @@ var ZoteroAIReading = {
         }
       }
       if (appended || buttons.some((button) => button.isConnected)) {
+        this.enforceReaderToolbarButtonOrder(buttons);
         this.attachReaderToolbarButtonClickBridge(reader, buttons);
       }
       this.ensureReaderAlphaXivAvailability(reader).catch(() => {});
@@ -969,28 +950,7 @@ var ZoteroAIReading = {
       this.scheduleReaderSelectionTranslationInjection(reader);
 
       let toolbar = this.getReaderToolbarButtonContainer(doc);
-      let buttons = [];
-      let existingButton = doc.getElementById(this.READER_BUTTON_ID);
-      let existingTranslationButton = doc.getElementById(this.READER_TRANSLATION_BUTTON_ID);
-      let existingAlphaXivButton = doc.getElementById(this.READER_ALPHAXIV_BUTTON_ID);
-      if (existingButton) {
-        buttons.push(existingButton);
-      }
-      else {
-        buttons.push(this.createReaderToolbarButton(doc, reader));
-      }
-      if (existingTranslationButton) {
-        buttons.push(existingTranslationButton);
-      }
-      else {
-        buttons.push(this.createReaderTranslationToolbarButton(doc, reader));
-      }
-      if (existingAlphaXivButton) {
-        buttons.push(existingAlphaXivButton);
-      }
-      else {
-        buttons.push(this.createReaderAlphaXivToolbarButton(doc, reader));
-      }
+      let buttons = this.getReaderToolbarButtonsInVisualOrder(doc, reader);
       let appended = false;
       for (let button of buttons) {
         if (toolbar && button.parentNode !== toolbar) {
@@ -1002,6 +962,7 @@ var ZoteroAIReading = {
         }
       }
       if (appended || buttons.some((button) => button.isConnected)) {
+        this.enforceReaderToolbarButtonOrder(buttons);
         this.attachReaderToolbarButtonClickBridge(reader, buttons);
       }
       this.ensureReaderAlphaXivAvailability(reader).catch(() => {});
@@ -1017,6 +978,36 @@ var ZoteroAIReading = {
       doc?.querySelector?.(".toolbar .end") ||
       doc?.querySelector?.(".toolbar")
     );
+  },
+
+  getReaderToolbarButtonsInVisualOrder(doc, reader) {
+    let translationButton = doc.getElementById(this.READER_TRANSLATION_BUTTON_ID) ||
+      this.createReaderTranslationToolbarButton(doc, reader);
+    let alphaXivButton = doc.getElementById(this.READER_ALPHAXIV_BUTTON_ID) ||
+      this.createReaderAlphaXivToolbarButton(doc, reader);
+    let chatButton = doc.getElementById(this.READER_BUTTON_ID) ||
+      this.createReaderToolbarButton(doc, reader);
+    return [translationButton, alphaXivButton, chatButton];
+  },
+
+  enforceReaderToolbarButtonOrder(buttons) {
+    let ordered = Array.from(buttons || []).filter(Boolean);
+    let parent = ordered[0]?.parentNode;
+    if (!parent || ordered.some((button) => button.parentNode !== parent)) {
+      return false;
+    }
+    let children = Array.from(parent.children || []);
+    let indices = ordered.map((button) => children.indexOf(button));
+    let alreadyOrdered = indices.every((index, position) =>
+      index >= 0 && (position === 0 || index > indices[position - 1])
+    );
+    if (alreadyOrdered) {
+      return false;
+    }
+    for (let button of ordered) {
+      parent.appendChild(button);
+    }
+    return true;
   },
 
   appendReaderToolbarButtonToDOM(doc, button) {

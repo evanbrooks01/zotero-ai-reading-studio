@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.22
+
+- Aligns the PDF toolbar with the reading layout: translation on the left, alphaXiv brief in the middle, and AI on the right.
+- Automatically corrects toolbar buttons left behind in the older order after an in-place upgrade.
+
 ## 0.7.21
 
 - Renders inline and display LaTeX in reading-assistant replies with bundled KaTeX MathML, including formulas already stored in paper conversations.

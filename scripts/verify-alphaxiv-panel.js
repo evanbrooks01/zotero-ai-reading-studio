@@ -241,6 +241,42 @@ function verifyToolbarOverlaySuspension() {
   }
 }
 
+function verifyReaderToolbarVisualOrder() {
+  const translation = { id: sut.READER_TRANSLATION_BUTTON_ID };
+  const brief = { id: sut.READER_ALPHAXIV_BUTTON_ID };
+  const chat = { id: sut.READER_BUTTON_ID };
+  const nodes = new Map([
+    [translation.id, translation],
+    [brief.id, brief],
+    [chat.id, chat]
+  ]);
+  const doc = { getElementById: (id) => nodes.get(id) || null };
+  const ordered = sut.getReaderToolbarButtonsInVisualOrder(doc, {});
+  assert.deepStrictEqual(
+    Array.from(ordered, (button) => button.id),
+    [sut.READER_TRANSLATION_BUTTON_ID, sut.READER_ALPHAXIV_BUTTON_ID, sut.READER_BUTTON_ID]
+  );
+
+  const parent = {
+    children: [chat, translation, brief],
+    appendChild(button) {
+      const index = this.children.indexOf(button);
+      if (index >= 0) this.children.splice(index, 1);
+      this.children.push(button);
+      button.parentNode = this;
+      return button;
+    }
+  };
+  for (const button of parent.children) button.parentNode = parent;
+  assert.strictEqual(sut.enforceReaderToolbarButtonOrder(ordered), true);
+  assert.deepStrictEqual(parent.children.map((button) => button.id), [
+    sut.READER_TRANSLATION_BUTTON_ID,
+    sut.READER_ALPHAXIV_BUTTON_ID,
+    sut.READER_BUTTON_ID
+  ]);
+  assert.strictEqual(sut.enforceReaderToolbarButtonOrder(ordered), false);
+}
+
 function verifyRetargetedAlphaXivHeaderRouting() {
   const reader = {};
   const activated = [];
@@ -605,6 +641,7 @@ verifySelectionContext();
 verifyReadingSurfaceSwitch();
 verifyToolbarBridgeIsolation();
 verifyToolbarOverlaySuspension();
+verifyReaderToolbarVisualOrder();
 verifyRetargetedAlphaXivHeaderRouting();
 verifyAlphaXivBoundsClamping();
 verifyExistingPaneAdoptionAndBlankDetection();
